@@ -2,6 +2,6 @@ target/
 .settings
 .classpath
 .project
-# 忽略idea项目文件
+# 蹇界暐idea椤圭洰鏂囦欢
 .idea
 *.iml

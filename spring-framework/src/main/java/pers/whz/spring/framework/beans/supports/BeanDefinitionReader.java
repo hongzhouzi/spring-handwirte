@@ -20,6 +20,10 @@ public class BeanDefinitionReader {
      * 保存配置文件中的内容
      */
     private Properties contextConfig = new Properties();
+    /**
+     * 保存扫描的 .class 文件名
+     */
+    private List<String> registryBeanClasses = new ArrayList<>();
 
     public BeanDefinitionReader(String... configLocations) {
         // 1、加载配置文件
@@ -31,10 +35,7 @@ public class BeanDefinitionReader {
         doScanner(contextConfig.getProperty("scanPackage"));
     }
 
-    /**
-     * 保存扫描的 .class 文件名
-     */
-    private List<String> registryBeanClasses = new ArrayList<>();
+
 
     /**
      * 1、加载配置文件
@@ -101,15 +102,19 @@ public class BeanDefinitionReader {
                 result.add(doCreateBeanDefinition(toLowerFirstCase(beanClass.getSimpleName()), beanClass.getName()));
                 // 2、自定义
                 // 3、接口注入
-                /*for (Class<?> i : beanClass.getInterfaces()) {
+                for (Class<?> i : beanClass.getInterfaces()) {
                     result.add(doCreateBeanDefinition(i.getName(),beanClass.getName()));
-                }*/
+                }
             }
         }catch (Exception e){
             e.printStackTrace();
         }
 
         return result;
+    }
+
+    public Properties getConfig(){
+        return this.contextConfig;
     }
 
     /**

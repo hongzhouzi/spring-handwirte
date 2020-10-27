@@ -5,10 +5,13 @@ import pers.whz.spring.framework.annotation.Controller;
 import pers.whz.spring.framework.annotation.RequestMapping;
 import pers.whz.spring.framework.annotation.RequestParam;
 import pers.whz.spring.framework.demo.service.IDemoService;
+import pers.whz.spring.framework.webmvc.component.ModelAndView;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * @author hongzhou.wei
@@ -31,5 +34,14 @@ public class DemoController {
         }
     }
 
+    @RequestMapping("/model")
+    public ModelAndView model(@RequestParam("name") String name) {
+        String result = demoService.get(name);
+        Map<String, Object> model = new HashMap<>();
+        model.put("name", name);
+        model.put("data", result);
+        model.put("token", "123456");
+        return new ModelAndView("demo.html", model);
+    }
 
 }

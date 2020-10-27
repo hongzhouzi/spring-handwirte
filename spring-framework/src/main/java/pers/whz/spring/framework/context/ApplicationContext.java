@@ -8,9 +8,9 @@ import pers.whz.spring.framework.beans.config.BeanDefinition;
 import pers.whz.spring.framework.beans.supports.BeanDefinitionReader;
 
 import java.lang.reflect.Field;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -84,7 +84,7 @@ public class ApplicationContext {
      * @param beanName
      * @return 封装在 {@link BeanWrapper}中的instance
      */
-    private Object getBean(String beanName) {
+    public Object getBean(String beanName) {
         // 1、拿到BeanDefinition配置信息
         BeanDefinition beanDefinition = this.beanDefinitionMap.get(beanName);
 
@@ -119,9 +119,15 @@ public class ApplicationContext {
         String className = beanDefinition.getBeanClassName();
         Object instance = null;
         try {
-            Class<?> clazz = Class.forName(className);
-            instance = clazz.newInstance();
-            this.factoryBeanObjectCache.put(beanName, instance);
+            if (this.factoryBeanObjectCache.containsKey(beanName)) {
+                instance = this.factoryBeanObjectCache.get(beanName);
+            } else {
+                // TODO: 2020/10/27 若是接口则不能实例化，但是在扫描类时将接口也加入BeanDefinition中
+                // 这儿实例化时就会报错
+                Class<?> clazz = Class.forName(className);
+                instance = clazz.newInstance();
+                this.factoryBeanObjectCache.put(beanName, instance);
+            }
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -171,4 +177,25 @@ public class ApplicationContext {
         }
     }
 
+    /**
+     * 获取已注册bean的数量
+     *
+     * @return
+     */
+    public int getBeanDefinitionCount() {
+        return beanDefinitionMap.size();
+    }
+
+    /**
+     * 获取已注册bean的beanName
+     *
+     * @return
+     */
+    public String[] getBeanDefinitionNames() {
+        return this.beanDefinitionMap.keySet().toArray(new String[getBeanDefinitionCount()]);
+    }
+
+    public Properties getConfig() {
+        return this.reader.getConfig();
+    }
 }

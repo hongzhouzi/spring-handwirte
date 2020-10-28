@@ -19,7 +19,7 @@ public class BeanDefinitionReader {
     /**
      * 保存配置文件中的内容
      */
-    private Properties contextConfig = new Properties();
+    private Properties   contextConfig       = new Properties();
     /**
      * 保存扫描的 .class 文件名
      */
@@ -36,20 +36,19 @@ public class BeanDefinitionReader {
     }
 
 
-
     /**
      * 1、加载配置文件
      *
      * @param contextConfigLocation
      */
     private void doLoadConfig(String contextConfigLocation) {
-        InputStream is = this.getClass().getClassLoader().getResourceAsStream(contextConfigLocation.replaceAll("classpath:",""));
+        InputStream is = this.getClass().getClassLoader().getResourceAsStream(contextConfigLocation.replaceAll("classpath:", ""));
         try {
             contextConfig.load(is);
         } catch (IOException e) {
             e.printStackTrace();
-        }finally {
-            if(null != is){
+        } finally {
+            if (null != is) {
                 try {
                     is.close();
                 } catch (IOException e) {
@@ -65,17 +64,17 @@ public class BeanDefinitionReader {
      * @param scanPackage 配置的扫描目录
      */
     private void doScanner(String scanPackage) {
-        URL url = this.getClass().getClassLoader().getResource("/" + scanPackage.replaceAll("\\.","/"));
+        URL url = this.getClass().getClassLoader().getResource("/" + scanPackage.replaceAll("\\.", "/"));
         File classPath = new File(url.getFile());
 
         // 当成是一个ClassPath文件夹
         for (File file : classPath.listFiles()) {
             // 当前文件类型为文件夹，则递归往下扫描
-            if(file.isDirectory()){
+            if (file.isDirectory()) {
                 doScanner(scanPackage + "." + file.getName());
-            }else {
+            } else {
                 // 当前文件类型是.class 文件，则添加到注册容器
-                if(file.getName().endsWith(".class")){
+                if (file.getName().endsWith(".class")) {
                     // 全类名 = 包名.类名
                     String className = (scanPackage + "." + file.getName().replace(".class", ""));
                     registryBeanClasses.add(className);
@@ -96,24 +95,27 @@ public class BeanDefinitionReader {
         try {
             for (String className : registryBeanClasses) {
                 Class<?> beanClass = Class.forName(className);
-
+                // 若是接口就直接跳过
+                if (beanClass.isInterface()) {
+                    continue;
+                }
                 // 保存类对应的ClassName（全类名）、beanName
                 // 1、默认是类名首字母小写
                 result.add(doCreateBeanDefinition(toLowerFirstCase(beanClass.getSimpleName()), beanClass.getName()));
                 // 2、自定义
                 // 3、接口注入
                 for (Class<?> i : beanClass.getInterfaces()) {
-                    result.add(doCreateBeanDefinition(i.getName(),beanClass.getName()));
+                    result.add(doCreateBeanDefinition(i.getName(), beanClass.getName()));
                 }
             }
-        }catch (Exception e){
+        } catch (Exception e) {
             e.printStackTrace();
         }
 
         return result;
     }
 
-    public Properties getConfig(){
+    public Properties getConfig() {
         return this.contextConfig;
     }
 
@@ -132,7 +134,7 @@ public class BeanDefinitionReader {
     }
 
     private String toLowerFirstCase(String simpleName) {
-        char [] chars = simpleName.toCharArray();
+        char[] chars = simpleName.toCharArray();
         chars[0] += 32;
         return String.valueOf(chars);
     }

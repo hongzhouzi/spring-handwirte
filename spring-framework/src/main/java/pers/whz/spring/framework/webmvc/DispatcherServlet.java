@@ -42,7 +42,7 @@ public class DispatcherServlet extends HttpServlet {
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
 
-        //6、委派,根据URL去找到一个对应的Method并通过response返回
+        // 委派,根据URL去找到一个对应的Method并通过response返回
         try {
             doDispatch(req, resp);
         } catch (Exception e) {
@@ -241,9 +241,8 @@ public class DispatcherServlet extends HttpServlet {
                 if (method.isAnnotationPresent(RequestMapping.class)) {
                     RequestMapping requestMapping = method.getAnnotation(RequestMapping.class);
                     String regex = ("/" + baseUrl + "/"
-                        + requestMapping.value()
-                        .replaceAll("\\*", ".*")
-                        .replaceAll("/+", "/"));
+                        + requestMapping.value().replaceAll("\\*", ".*")
+                    ).replaceAll("/+", "/");
                     Pattern pattern = Pattern.compile(regex);
                     handlerMappings.add(new HandlerMapping(pattern, method, instance));
 

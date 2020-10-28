@@ -3,6 +3,9 @@ package pers.whz.spring.framework.context;
 import pers.whz.spring.framework.annotation.Autowired;
 import pers.whz.spring.framework.annotation.Controller;
 import pers.whz.spring.framework.annotation.Service;
+import pers.whz.spring.framework.aop.JdkDynamicAopProxy;
+import pers.whz.spring.framework.aop.config.AopConfig;
+import pers.whz.spring.framework.aop.support.AdvisedSupport;
 import pers.whz.spring.framework.beans.BeanWrapper;
 import pers.whz.spring.framework.beans.config.BeanDefinition;
 import pers.whz.spring.framework.beans.supports.BeanDefinitionReader;
@@ -122,10 +125,21 @@ public class ApplicationContext {
             if (this.factoryBeanObjectCache.containsKey(beanName)) {
                 instance = this.factoryBeanObjectCache.get(beanName);
             } else {
-                // TODO: 2020/10/27 若是接口则不能实例化，但是在扫描类时将接口也加入BeanDefinition中
-                // 这儿实例化时就会报错
                 Class<?> clazz = Class.forName(className);
                 instance = clazz.newInstance();
+
+                // ========== AOP start ==========
+                // 1、加载aop配置文件
+                AdvisedSupport config = instantionAopConfig(beanDefinition);
+                config.setTargetClass(clazz);
+                config.setTarget(instance);
+
+                // 2、判断该实例是否配置了代理
+                if(config.pointCutMatcher()){
+                    instance = new JdkDynamicAopProxy(config);
+                }
+                // ========== AOP end ============
+
                 this.factoryBeanObjectCache.put(beanName, instance);
             }
         } catch (Exception e) {
@@ -197,5 +211,22 @@ public class ApplicationContext {
 
     public Properties getConfig() {
         return this.reader.getConfig();
+    }
+
+    /**
+     * 将aop配置文件实例化到类中
+     *
+     * @param beanDefinition
+     * @return
+     */
+    private AdvisedSupport instantionAopConfig(BeanDefinition beanDefinition) {
+        AopConfig config = new AopConfig();
+        config.setPointCut(this.reader.getConfig().getProperty("pointCut"));
+        config.setAspectClass(this.reader.getConfig().getProperty("aspectClass"));
+        config.setAspectBefore(this.reader.getConfig().getProperty("aspectBefore"));
+        config.setAspectAfter(this.reader.getConfig().getProperty("aspectAfter"));
+        config.setAspectAfterThrow(this.reader.getConfig().getProperty("aspectAfterThrow"));
+        config.setAspectAfterThrowingName(this.reader.getConfig().getProperty("aspectAfterThrowingName"));
+        return new AdvisedSupport(config);
     }
 }

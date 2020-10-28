@@ -7,4 +7,7 @@ package pers.whz.spring.framework.demo.service;
 public interface IDemoService {
 
     String get(String name);
+
+    int update(String name) throws Exception;
+
 }

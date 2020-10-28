@@ -13,4 +13,9 @@ public class DemoServiceImpl implements IDemoService {
     public String get(String name) {
         return "My name is " + name + ",from service.";
     }
+
+    @Override
+    public int update(String name) throws Exception {
+        throw new Exception("故意抛出的异常");
+    }
 }

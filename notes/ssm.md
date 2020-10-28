@@ -294,7 +294,9 @@ SpringMVC核心组件执行流程
 > IOC/AOP/DI/MVC的顺序
 >
 > 从ApplicationContext中进入，判断BeanWarper中的类是否要生成代理类。需要生成代理类就生成代理类(根据切面表达式判断)，并在实例化bean中将代理类实例化的对象作为实例对象。
->
+
+核心组件执行流程：
+
 > ApplicationContext  ->  AdvisedSupport  ->  AopConfig  ->  Advice  ->   JDKDynamicAopProxy  
 
 

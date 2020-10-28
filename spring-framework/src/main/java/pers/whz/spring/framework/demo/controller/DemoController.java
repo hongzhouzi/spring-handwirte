@@ -10,6 +10,7 @@ import pers.whz.spring.framework.webmvc.component.ModelAndView;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -42,6 +43,19 @@ public class DemoController {
         model.put("data", result);
         model.put("token", "123456");
         return new ModelAndView("demo.html", model);
+    }
+
+    @RequestMapping("/update")
+    public ModelAndView update(@RequestParam("name") String name) {
+        try {
+            int result = demoService.update(name);
+            return null;
+        }catch (Throwable e){
+            Map<String,String> model = new HashMap<>();
+            model.put("detail",e.getCause().getMessage());
+            model.put("stackTrace", Arrays.toString(e.getStackTrace()));
+            return new ModelAndView("500",model);
+        }
     }
 
 }

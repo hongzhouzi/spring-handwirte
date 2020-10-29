@@ -22,6 +22,9 @@ public class AdvisedSupport {
     private Class     targetClass;
     private Pattern   pointCutClassPattern;
 
+    /**
+     * 方法和通知，一个方法可以对应多个通知
+     */
     private Map<Method, Map<String, Advice>> methodCache;
 
     public AdvisedSupport(AopConfig config) {
@@ -39,6 +42,8 @@ public class AdvisedSupport {
             .replaceAll("\\(", "\\\\(")
             .replaceAll("\\)", "\\\\)");
 
+        // 正则匹配三段：方法的修饰符合返回值、类名、方法名称和形参列表
+
         // 匹配class的正则表达式
         String pointCutForClassRegex = pointCut.substring(0, pointCut.lastIndexOf("\\(") - 4);
         pointCutClassPattern = Pattern.compile("class " + pointCutForClassRegex.substring(pointCutForClassRegex.lastIndexOf(" ") + 1));
@@ -54,8 +59,9 @@ public class AdvisedSupport {
                 aspectMethods.put(method.getName(), method);
             }
 
+            // 封装 advices
             for (Method method : targetClass.getMethods()) {
-                // 判断方法上是否有异常抛出，有则去掉
+                // 暂时先匹配方法名，若方法上有异常抛出则将其去掉
                 String methodStr = method.toString();
                 if (methodStr.contains("throws")) {
                     methodStr = methodStr.substring(0, methodStr.lastIndexOf("throws")).trim();
@@ -63,16 +69,16 @@ public class AdvisedSupport {
 
                 Matcher matcher = pointCutPattern.matcher(methodStr);
                 if (matcher.matches()) {
-                    // 获取前置、后置、异常通知方法
+                    // 获取前置、后置、异常通知方法，【注意下面是将 aspectClass 的实例和对应方法填充进去】
                     Map<String, Advice> advices = new HashMap<>();
                     if (StringUtils.isNotBlank(config.getAspectBefore())) {
-                        advices.put("before", new Advice(aspectClass.getName(), aspectMethods.get(config.getAspectBefore())));
+                        advices.put("before", new Advice(aspectClass.newInstance(), aspectMethods.get(config.getAspectBefore())));
                     }
                     if (StringUtils.isNotBlank(config.getAspectAfter())) {
-                        advices.put("after", new Advice(aspectClass.getName(), aspectMethods.get(config.getAspectAfter())));
+                        advices.put("after", new Advice(aspectClass.newInstance(), aspectMethods.get(config.getAspectAfter())));
                     }
                     if (StringUtils.isNotBlank(config.getAspectAfterThrow())) {
-                        advices.put("afterThrow", new Advice(aspectClass.getName(), aspectMethods.get(config.getAspectAfterThrow())));
+                        advices.put("afterThrow", new Advice(aspectClass.newInstance(), aspectMethods.get(config.getAspectAfterThrow())));
                     }
 
                     // 与目标代理类的业务方法和Advices建立一对多个关联关系，以便在Proxy类中获得

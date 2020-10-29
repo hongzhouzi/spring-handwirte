@@ -10,11 +10,11 @@ import java.io.File;
  */
 public class ViewResolver {
     private final String DEFAULT_TEMPLATE_SUFFIX = ".html";
-    private       File   tempateRootDir;
+    private       File   templateRootDir;
 
     public ViewResolver(String templateRoot) {
         String templateRootPath = this.getClass().getClassLoader().getResource(templateRoot).getFile();
-        tempateRootDir = new File(templateRootPath);
+        templateRootDir = new File(templateRootPath);
     }
 
     public View resolveViewName(String viewName) {
@@ -24,7 +24,7 @@ public class ViewResolver {
         viewName = viewName.endsWith(DEFAULT_TEMPLATE_SUFFIX)
             ? viewName
             : (viewName + DEFAULT_TEMPLATE_SUFFIX);
-        File templateFile = new File((tempateRootDir.getPath() + "/" + viewName)
+        File templateFile = new File((templateRootDir.getPath() + "/" + viewName)
             .replaceAll("/+", "/"));
         return new View(templateFile);
     }

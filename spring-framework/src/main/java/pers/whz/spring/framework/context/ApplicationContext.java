@@ -9,7 +9,9 @@ import pers.whz.spring.framework.aop.support.AdvisedSupport;
 import pers.whz.spring.framework.beans.BeanWrapper;
 import pers.whz.spring.framework.beans.config.BeanDefinition;
 import pers.whz.spring.framework.beans.supports.BeanDefinitionReader;
+import sun.misc.ProxyGenerator;
 
+import java.io.FileOutputStream;
 import java.lang.reflect.Field;
 import java.util.List;
 import java.util.Map;
@@ -135,8 +137,20 @@ public class ApplicationContext {
                 config.setTarget(instance);
 
                 // 2、判断该实例是否配置了代理
+                // 用正则匹配，该类是否在aop配置中
                 if(config.pointCutMatcher()){
-                    instance = new JdkDynamicAopProxy(config);
+                    instance = new JdkDynamicAopProxy(config).getProxy();
+
+                    /*// 将临时代码输出到磁盘，可通过反编译tool查看到源码
+                    byte[] bytes = ProxyGenerator.generateProxyClass("$Proxy5",
+                        new Class[]{clazz});
+                    try {
+                        FileOutputStream fos = new FileOutputStream("C://$Proxy5.class");
+                        fos.write(bytes);
+                        fos.close();
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }*/
                 }
                 // ========== AOP end ============
 

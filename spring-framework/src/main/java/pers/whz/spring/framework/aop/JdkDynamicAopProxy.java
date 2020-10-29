@@ -15,7 +15,7 @@ import java.util.Map;
  * @author hongzhou.wei
  * @date 2020/10/28
  */
-public class JdkDynamicAopProxy implements InvocationHandler {
+public class JdkDynamicAopProxy implements AopProxy, InvocationHandler {
     private AdvisedSupport config;
 
     public JdkDynamicAopProxy(AdvisedSupport config) {
@@ -25,18 +25,19 @@ public class JdkDynamicAopProxy implements InvocationHandler {
     @Override
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
         Map<String, Advice> advices = config.getAdvices(method, null);
-        Object ret = null;
+
+        invokeAdvice(advices.get("before"));
+
+        Object ret;
         try {
-            invokeAdvice(advices.get("before"));
-
             ret = method.invoke(this.config.getTarget(), args);
-
-            invokeAdvice(advices.get("after"));
-
         } catch (Exception e) {
             invokeAdvice(advices.get("afterThrow"));
             throw e;
         }
+
+        invokeAdvice(advices.get("after"));
+
         return ret;
     }
 
@@ -48,7 +49,13 @@ public class JdkDynamicAopProxy implements InvocationHandler {
         }
     }
 
+    @Override
     public Object getProxy() {
-        return Proxy.newProxyInstance(this.getClass().getClassLoader(), this.config.getTargetClass().getInterfaces(), this);
+        return getProxy(this.config.getTargetClass().getClassLoader());
+    }
+
+    @Override
+    public Object getProxy(ClassLoader classLoader) {
+        return Proxy.newProxyInstance(classLoader, this.config.getTargetClass().getInterfaces(), this);
     }
 }

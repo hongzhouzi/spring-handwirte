@@ -336,7 +336,9 @@ SpringMVC核心组件执行流程
 
 ##### BeanFactory创建bean接口
 
-> 作为顶层的一个接口类，它定义了IOC容器的基本功能规范，其中有三个非常重要的子类：ListableBeanFactory、HierarchicalBeanFactory、Auto
+> 作为顶层的一个接口类，它定义了IOC容器的基本功能规范，其中有三个非常重要的子类：ListableBeanFactory、HierarchicalBeanFactory、AutowireCapableBeanFactory。
+>
+> 为什么需要这么多层次的接口呢？主要是**区分在spring内部在操作过程中对象的传递和转化过程时对对象的数据访问所做的限制**。ListableBeanFactory 接口表示这些接口是可列表化的，而HierarchicalBeanFactory表示这些bean是有继承关系的，也就是每个bean有可能有父类bean。AutowireCapableBeanFactory定义bean的自动装配规则。这三个接口共同定义了bean的集合、bean之间的关系、bean的行为。
 
 
 

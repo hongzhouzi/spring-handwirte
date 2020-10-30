@@ -305,15 +305,40 @@ SpringMVC核心组件执行流程
 
 ### IOC运行时序图
 
-> 对象与对象之间的关系表示：xml/yml/注解等
+#### 思考设计
+
+> **1、对象与对象之间的关系如何表示？**
 >
-> 描述对象关系的文件存放：classpath/network/filesystem/servletContext/annotation.
+> xml、yml、注解等
+>
+> **2、描述对象关系的文件存放在哪儿？**	
+>
+> classpath、network、filesystem、servletContext.
+>
+> **3、不同配置文件对对象的描述不一样（标准的、自定义声明式的的）如何统一？**
+>
+> 在内部需要有一个统一的关于对象的定义，所有外部描述都必须转成统一的描述定义。
+>
+> **4、如何对不同的配置文件进行解析？**
+>
+> 需要有不同的配置文件语法，解析不同文件时采用不同的解析器解析。
+>
+> 
+>
 >
 > spring读取时先要找到文件在哪儿，再加载里面的内容。由于来源广泛且不同配置文件书写语法不一致，于是就定义 了一个配置文件标准，将配置文件中的信息统一解析放在BeanDefinition中，统一格式。
 >
 > 在解析配置文件时根据不同配置文件类型实施不同解析策略。
 >
 > ClassPathApplicationContext/AnnotationConfigApplicationContext/WebApplicationContext等解析策略。BeanDefinitionReader也有多种（XmlBeanDefinitionReader等）BeanDefinition层次也有多种封装策略（如：XmlBeanDefinition等 ），但最终都需封装成BeanDefinition。
+
+#### 设计点关键
+
+##### BeanFactory创建bean接口
+
+> 作为顶层的一个接口类，它定义了IOC容器的基本功能规范，其中有三个非常重要的子类：ListableBeanFactory、HierarchicalBeanFactory、Auto
+
+
 
 **IOC容器初始化三部曲**
 

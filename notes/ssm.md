@@ -334,21 +334,125 @@ SpringMVC核心组件执行流程
 
 #### 设计点关键
 
-##### BeanFactory创建bean接口
+##### 1、BeanFactory接口（定义IOC容器规范）
 
 > 作为顶层的一个接口类，它定义了IOC容器的基本功能规范，其中有三个非常重要的子类：ListableBeanFactory、HierarchicalBeanFactory、AutowireCapableBeanFactory。
 >
 > 为什么需要这么多层次的接口呢？主要是**区分在spring内部在操作过程中对象的传递和转化过程时对对象的数据访问所做的限制**。ListableBeanFactory 接口表示这些接口是可列表化的，而HierarchicalBeanFactory表示这些bean是有继承关系的，也就是每个bean有可能有父类bean。AutowireCapableBeanFactory定义bean的自动装配规则。这三个接口共同定义了bean的集合、bean之间的关系、bean的行为。
+>
+> ```java
+> public interface BeanFactory {
+> 
+> 	/**
+> 	 * Used to dereference a {@link FactoryBean} instance and distinguish it from
+> 	 * beans <i>created</i> by the FactoryBean. For example, if the bean named
+> 	 * {@code myJndiObject} is a FactoryBean, getting {@code &myJndiObject}
+> 	 * will return the factory, not the instance returned by the factory.
+> 	 */
+> 	//对FactoryBean的转义定义，因为如果使用bean的名字检索FactoryBean得到的对象是工厂生成的对象，
+> 	//如果需要得到工厂本身，需要转义
+> 	String FACTORY_BEAN_PREFIX = "&";
+> 
+> 	//根据bean的名字，获取在IOC容器中得到bean实例
+> 	Object getBean(String name) throws BeansException;
+> 
+> 	//根据bean的名字和Class类型来得到bean实例，增加了类型安全验证机制。
+> 	<T> T getBean(String name, @Nullable Class<T> requiredType) throws BeansException;
+> 	Object getBean(String name, Object... args) throws BeansException;
+> 	<T> T getBean(Class<T> requiredType) throws BeansException;
+> 	<T> T getBean(Class<T> requiredType, Object... args) throws BeansException;
+> 
+> 	//提供对bean的检索，看看是否在IOC容器有这个名字的bean
+> 	boolean containsBean(String name);
+> 
+> 	/**
+> 	 * Is this bean a shared singleton? That is, will {@link #getBean} always
+> 	 * return the same instance?
+> 	 * <p>Note: This method returning {@code false} does not clearly indicate
+> 	 * independent instances. It indicates non-singleton instances, which may correspond
+> 	 * to a scoped bean as well. Use the {@link #isPrototype} operation to explicitly
+> 	 * check for independent instances.
+> 	 * <p>Translates aliases back to the corresponding canonical bean name.
+> 	 * Will ask the parent factory if the bean cannot be found in this factory instance.
+> 	 * @param name the name of the bean to query
+> 	 * @return whether this bean corresponds to a singleton instance
+> 	 * @throws NoSuchBeanDefinitionException if there is no bean with the given name
+> 	 * @see #getBean
+> 	 * @see #isPrototype
+> 	 */
+> 	//根据bean名字得到bean实例，并同时判断这个bean是不是单例
+> 	boolean isSingleton(String name) throws NoSuchBeanDefinitionException;
+> 	boolean isPrototype(String name) throws NoSuchBeanDefinitionException;
+> 	boolean isTypeMatch(String name, ResolvableType typeToMatch) throws NoSuchBeanDefinitionException;
+> 	boolean isTypeMatch(String name, @Nullable Class<?> typeToMatch) throws NoSuchBeanDefinitionException;
+> 
+> 	//得到bean实例的Class类型
+> 	@Nullable
+> 	Class<?> getType(String name) throws NoSuchBeanDefinitionException;
+> 
+> 	//得到bean的别名，如果根据别名检索，那么其原名也会被检索出来
+> 	String[] getAliases(String name);
+> }
+> ```
+>
+> 
 
 
+
+##### 2、BeanDefinition（定义对象描述）
+
+> 装配bean时可以有多种方式（如：xml配置、注解配置等），它用于将各种配置方式转化成统一的描述定义。
+
+##### 3、BeanDefinitionReader（读取bean配置信息）
+
+> 在读取Bean信息时解析的过程非常复杂，功能被分得很细，需要被扩展的地方非常多。
+
+
+
+#### 容器初始化过程
 
 **IOC容器初始化三部曲**
 
-> 定位：定位配置文件和扫描相关注解
+> 1. **定位：**定位配置文件和扫描相关注解，容器通过BeanDefinitionReader来完成定义信息的解析和Bean信息的注册（如使用XmlBeanDefinitionReader来解析Bean的xml定义文件，但实际处理是委托给BeanDefinitionParserDelegate来完成，从而得到bean的定义信息），这些信息在spring中使用BeanDefinition对象来表示。
 >
-> 加载
+> 2. **加载：**通过ResourceLoader来完成资源文件位置的定位，DefaultResourceLoader是默认实现，同时上下文本身就给出了ResourceLoader的实现，可以从类路径、文件系统、URL等方式来定位资源位置。
 >
-> 注册
+> 3. **注册：**由BeanDefinitionRegistry接口来实现，注册过程就是在IOC容器中用hashmap来保存BeanDefinition的过程。
+
+**大致步骤**
+
+> 1. 初始化入口在容器中实现的refresh()调用来完成。
+> 2. 对bean定义载入IOC容器使用的方法是loadBeanDefinition()
+
+
+
+#### 容器初始化实例
+
+##### 基于Web的IOC 
+
+init()
+
+> 从DispatchServlet的init()开始，但是发现init()在父类HttpServletBean中重写的init()
+
+initServletBean()
+
+> 真正完成初始化容器的动作
+
+initWebApplicationContext()
+
+> 可以看到在 configAndRefreshWebApplicationContext()中调用了refresh()，这个就是IOC容器真正的入口。IOC容器初始化后调用了DispatchServlet中的onRefresh()，在onRefresh()中调用了initStrategies()初始化SpringMVC 9大组件
+
+
+
+
+
+##### 基于XML的IOC
+
+> ApplicationContext允许上下文嵌套，通过保持父上下文可以维持一个上下文体系。对于bean的查找可以在这个上下文体系中发生，首先检查当前上下文，其次是父上下文，逐级向上，这样为不同的Spring应用提供了一个共享的bean定义环境。
+
+寻找入口
+
+
 
 
 

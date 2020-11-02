@@ -645,6 +645,7 @@ protected void loadBeanDefinitions(DefaultListableBeanFactory beanFactory) throw
    // 为Bean读取器设置Spring资源加载器，AbstractXmlApplicationContext的
    // 祖先父类AbstractApplicationContext继承DefaultResourceLoader，因此，容器本身也是一个资源加载器
    beanDefinitionReader.setEnvironment(this.getEnvironment());
+   // 【注意】这儿设置的this(当前对象的引用)，当前对象是DefaultResourceLoader的子类，后面在AbstractBeanDefinitionReader#loadBeanDefinitions(String, Set<Resource>) 中调用getResource(String)时实际就是调用的DefaultResourceLoader中的方法
    beanDefinitionReader.setResourceLoader(this);
    // 为Bean读取器设置SAX xml解析器（ResourceEntityResolver继承自SAX xml解析器的实体）
    beanDefinitionReader.setEntityResolver(new ResourceEntityResolver(this));
@@ -671,7 +672,7 @@ protected void loadBeanDefinitions(XmlBeanDefinitionReader reader) throws BeansE
    // 获取Bean定义资源的定位
    Resource[] configResources = getConfigResources();
    if (configResources != null) {
-      // Xml Bean读取器调用其父类AbstractBeanDefinitionReader读取定位的Bean定义资源
+      // Xml Bean读取器【调用其父类AbstractBeanDefinitionReader】读取定位的Bean定义资源
       reader.loadBeanDefinitions(configResources);
    }
    // 若子类中获取的Bean定义资源定位为空，则获取FileSystemXmlApplicationContext构造方法中setConfigLocations方法设置的资源
@@ -711,9 +712,9 @@ public int loadBeanDefinitions(String location, @Nullable Set<Resource> actualRe
         // Resource pattern matching available.
         try {
             // 将指定位置的Bean定义资源文件解析为Spring IOC容器封装的资源
-            // 加载多个指定位置的Bean定义资源文件 ==== getResources(location) ======
+            // 【7、解析配置文件，加载多个指定位置的Bean定义资源文件】 ==== getResources(location) ======在AbstractXmlApplicationContext#loadBeanDefinitions(DefaultListableBeanFactory)设置的resourceLoader，此处调用的DefaultResourceLoader#getResource(String)
             Resource[] resources = ((ResourcePatternResolver) resourceLoader).getResources(location);
-            // 委派调用其子类XmlBeanDefinitionReader的方法，实现加载功能
+            // 【8、读取配置文件】委派调用其子类XmlBeanDefinitionReader的方法，实现加载功能
             int loadCount = loadBeanDefinitions(resources);
             if (actualResources != null) {
                 for (Resource resource : resources) {
@@ -740,7 +741,80 @@ public int loadBeanDefinitions(String location, @Nullable Set<Resource> actualRe
         return loadCount;
     }
 }
+```
 
+
+
+###### 7、解析配置文件路径
+
+> 加载资源时用getResource()获取要加载的资源
+>
+> 加载多个指定位置的Bean定义资源文件，在AbstractXmlApplicationContext#loadBeanDefinitions(DefaultListableBeanFactory)设置的resourceLoader，但因为AbstractXmlApplicationContext是DefaultResourceLoader的子类，所以此处调用的DefaultResourceLoader的中的getResource(String)
+
+```java
+public Resource getResource(String location) {
+    Assert.notNull(location, "Location must not be null");
+
+    for (ProtocolResolver protocolResolver : this.protocolResolvers) {
+        Resource resource = protocolResolver.resolve(location, this);
+        if (resource != null) {
+            return resource;
+        }
+    }
+    // 若是类路径的方式，则使用ClassPathResource 来得到bean文件的资源对象
+    if (location.startsWith("/")) {
+        return getResourceByPath(location);
+    }
+    else if (location.startsWith(CLASSPATH_URL_PREFIX)) {
+        return new ClassPathResource(location.substring(CLASSPATH_URL_PREFIX.length()), getClassLoader());
+    }
+    else {
+        try {
+            // Try to parse the location as a URL...
+            // 若是URL 方式，使用UrlResource 作为bean 文件的资源对象
+            URL url = new URL(location);
+            return (ResourceUtils.isFileURL(url) ? new FileUrlResource(url) : new UrlResource(url));
+        }
+        catch (MalformedURLException ex) {
+            // No URL -> resolve as resource path.
+            // 若既不是classpath标识，又不是URL标识的Resource定位则调用
+            // 容器本身的getResourceByPath方法获取Resource
+            return getResourceByPath(location);
+        }
+    }
+}
+```
+
+> DefaultResourceLoader中提供了getResourceByPath()的实现，是为了处理既不是classpath标识也不是URL标识的Resource定位的情况。
+>
+> ```java
+> protected Resource getResourceByPath(String path) {
+> return new ClassPathContextResource(path, getClassLoader());
+> }
+> ```
+> 比如FileSystemXmlApplication容器就重写了getResourceByPath()，通过子类的覆盖巧妙完成了将类路径变成文件路径的转换。
+>
+> ```java
+> // FileSystemResourceLoader#getResourceByPath
+> protected Resource getResourceByPath(String path) {
+>     if (path.startsWith("/")) {
+>         path = path.substring(1);
+>     }
+>     // 这里使用文件系统资源对象来定义bean 文件
+>     return new FileSystemResource(path);
+> }
+> ```
+
+
+
+###### 8、读取配置文件内容
+
+> 经过上面步骤解析到配置文件内容后，这步就准备读取配置文件信息了。
+>
+> 此步骤主要是载入bean配置信息，然后将其转换成流，准备进一步将其转为Document对象。
+
+```java
+// ============== AbstractBeanDefinitionReader ================
 @Override
 public int loadBeanDefinitions(Resource... resources) throws BeanDefinitionStoreException {
     Assert.notNull(resources, "Resource array must not be null");
@@ -751,7 +825,7 @@ public int loadBeanDefinitions(Resource... resources) throws BeanDefinitionStore
     return counter;
 }
 
-// =================== XmlBeanDefinitionReader ===================
+// ================= XmlBeanDefinitionReader ===================
 // XmlBeanDefinitionReader加载资源的入口方法
 @Override
 public int loadBeanDefinitions(Resource resource) throws BeanDefinitionStoreException {
@@ -798,13 +872,229 @@ public int loadBeanDefinitions(EncodedResource encodedResource) throws BeanDefin
         }
     }
 }
+
+// 从特定XML文件中实际载入Bean定义资源的方法
+protected int doLoadBeanDefinitions(InputSource inputSource, Resource resource)
+    throws BeanDefinitionStoreException {
+    try {
+        // 将XML文件转换为DOM对象，解析过程由documentLoader实现
+        Document doc = doLoadDocument(inputSource, resource);
+        // 这里是启动对Bean定义解析的详细过程，该解析过程会用到Spring的Bean配置规则
+        return registerBeanDefinitions(doc, resource);
+    }
+    // ……
+}
 ```
 
 
 
-###### 7、解析配置文件路径
+###### 9、准备文档
 
-> 加载资源时用getResource()获取要加载的资源
+> 将配置信息的流转成文档对象
+
+```java
+// ================= XmlBeanDefinitionReader ===================
+protected Document doLoadDocument(InputSource inputSource, Resource resource) throws Exception {
+    return this.documentLoader.loadDocument(inputSource, getEntityResolver(), this.errorHandler,
+                                            getValidationModeForResource(resource), isNamespaceAware());
+}
+
+// ================= DefaultDocumentLoader ===================
+// 使用标准的JAXP将载入的Bean定义资源转换成document对象
+@Override
+public Document loadDocument(InputSource inputSource, EntityResolver entityResolver,
+                             ErrorHandler errorHandler, int validationMode, boolean namespaceAware) throws Exception {
+
+    // 创建文件解析器工厂
+    DocumentBuilderFactory factory = createDocumentBuilderFactory(validationMode, namespaceAware);
+    if (logger.isDebugEnabled()) {
+        logger.debug("Using JAXP provider [" + factory.getClass().getName() + "]");
+    }
+    // 创建文档解析器
+    DocumentBuilder builder = createDocumentBuilder(factory, entityResolver, errorHandler);
+    // 解析Spring的Bean定义资源
+    return builder.parse(inputSource);
+}
+
+protected DocumentBuilderFactory createDocumentBuilderFactory(int validationMode, boolean namespaceAware)
+    throws ParserConfigurationException {
+
+    // 创建文档解析工厂
+    DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+    factory.setNamespaceAware(namespaceAware);
+
+    // 设置解析XML的校验
+    if (validationMode != XmlValidationModeDetector.VALIDATION_NONE) {
+        factory.setValidating(true);
+        if (validationMode == XmlValidationModeDetector.VALIDATION_XSD) {
+            // Enforce namespace aware for XSD...
+            factory.setNamespaceAware(true);
+            try {
+                factory.setAttribute(SCHEMA_LANGUAGE_ATTRIBUTE, XSD_SCHEMA_LANGUAGE);
+            }
+            catch (IllegalArgumentException ex) {
+                ParserConfigurationException pcex = new ParserConfigurationException("……");
+                pcex.initCause(ex);
+                throw pcex;
+            }
+        }
+    }
+
+    return factory;
+}
+```
+
+> 此解析过程调用javaEE标准的JAXP标准进行处理。至此Sprig IOC容器根据定位的bean配置信息，将其加载并转换为Document对象过程完成。
+
+
+
+###### 10、分配解析策略
+
+> bean配置资源的载入解析分为两个过程：
+>
+> 1. 调用xml解析器将bean配置信息转换到document对象
+> 2. 按照spring bean的定义规则对document对象进行解析，其解析过程在BeanDefinitionDocumentReader接口的实现类DefaultBeanDefinitionDocumentReader中实现。
+
+```java
+// ============ XmlBeanDefinitionReader ============
+// 按照Spring的Bean语义要求将Bean定义资源解析并转换为容器内部数据结构
+public int registerBeanDefinitions(Document doc, Resource resource) throws BeanDefinitionStoreException {
+// 得到BeanDefinitionDocumentReader来对xml格式的BeanDefinition解析
+    BeanDefinitionDocumentReader documentReader = createBeanDefinitionDocumentReader();
+	// 获得容器中注册的Bean数量
+    int countBefore = getRegistry().getBeanDefinitionCount();
+    // 解析过程入口，使用了【委派模式】，BeanDefinitionDocumentReader只是接口,具体解析实现过程由实现类DefaultBeanDefinitionDocumentReader完成
+    documentReader.registerBeanDefinitions(doc, createReaderContext(resource));
+    // 统计解析的Bean数量
+    return getRegistry().getBeanDefinitionCount() - countBefore;
+}
+```
+
+
+
+###### 11、将配置载入内存
+
+> BeanDefinitionDocumentReader通过registerBeanDefinitions()调用其实现类DefaultBeanDefinitionDocumentReader对Document对象进行解析
+
+```java
+// ============ DefaultBeanDefinitionDocumentReader ============
+/**
+ * 根据Spring DTD对Bean的定义规则解析Bean定义Document对象
+ */
+@Override
+public void registerBeanDefinitions(Document doc, XmlReaderContext readerContext) {
+    // 获得XML描述符
+    this.readerContext = readerContext;
+    logger.debug("Loading bean definitions");
+    // 获得Document的根元素
+    Element root = doc.getDocumentElement();
+    doRegisterBeanDefinitions(root);
+}
+
+/**
+ * 解析<beans/>根节点下的所有bean
+ */
+protected void doRegisterBeanDefinitions(Element root) {
+    // Any nested <beans> elements will cause recursion in this method. In
+    // order to propagate and preserve <beans> default-* attributes correctly,
+    // keep track of the current (parent) delegate, which may be null. Create
+    // the new (child) delegate with a reference to the parent for fallback purposes,
+    // then ultimately reset this.delegate back to its original (parent) reference.
+    // this behavior emulates a stack of delegates without actually necessitating one.
+
+    // 具体的解析过程由BeanDefinitionParserDelegate实现，
+    // BeanDefinitionParserDelegate中定义了Spring Bean定义XML文件的各种元素
+    BeanDefinitionParserDelegate parent = this.delegate;
+    this.delegate = createDelegate(getReaderContext(), root, parent);
+    // ……
+
+    // 在解析Bean定义之前，进行自定义的解析，增强解析过程的可扩展性
+    preProcessXml(root);
+    // 从Document的根元素开始进行Bean定义的Document对象
+    parseBeanDefinitions(root, this.delegate);
+    // 在解析Bean定义之后，进行自定义的解析，增加解析过程的可扩展性
+    postProcessXml(root);
+
+    this.delegate = parent;
+}
+
+/**
+ * 创建BeanDefinitionParserDelegate，用于完成真正的解析过程
+ */
+protected BeanDefinitionParserDelegate createDelegate(
+    XmlReaderContext readerContext, Element root, @Nullable BeanDefinitionParserDelegate parentDelegate) {
+
+    BeanDefinitionParserDelegate delegate = new BeanDefinitionParserDelegate(readerContext);
+    // BeanDefinitionParserDelegate初始化Document根元素
+    delegate.initDefaults(root, parentDelegate);
+    return delegate;
+}
+
+/**
+ * 使用Spring的Bean规则从Document的根元素开始进行Bean定义的Document对象
+ */
+protected void parseBeanDefinitions(Element root, BeanDefinitionParserDelegate delegate) {
+    // Bean定义的Document对象使用了Spring默认的XML命名空间
+    if (delegate.isDefaultNamespace(root)) {
+        // 获取Bean定义的Document对象根元素的所有子节点
+        NodeList nl = root.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node node = nl.item(i);
+            // 获得Document节点是XML元素节点
+            if (node instanceof Element) {
+                Element ele = (Element) node;
+                // Bean定义的Document的元素节点使用的是Spring默认的XML命名空间
+                if (delegate.isDefaultNamespace(ele)) {
+                    // 使用Spring的Bean规则解析元素节点
+                    parseDefaultElement(ele, delegate);
+                }
+                else {
+                    // 没有使用Spring默认的XML命名空间，则使用用户自定义的解析规则解析元素节点
+                    delegate.parseCustomElement(ele);
+                }
+            }
+        }
+    }
+    else {
+        // Document的根节点没有使用Spring默认的命名空间，则使用用户自定义的
+        // 解析规则解析Document根节点
+        delegate.parseCustomElement(root);
+    }
+}
+
+/**
+ * 使用Spring的Bean规则解析Document元素节点
+ */
+private void parseDefaultElement(Element ele, BeanDefinitionParserDelegate delegate) {
+    // 如果元素节点是<Import>导入元素，进行导入解析
+    if (delegate.nodeNameEquals(ele, IMPORT_ELEMENT)) {
+        importBeanDefinitionResource(ele);
+    }
+    // 如果元素节点是<Alias>别名元素，进行别名解析
+    else if (delegate.nodeNameEquals(ele, ALIAS_ELEMENT)) {
+        processAliasRegistration(ele);
+    }
+    // 元素节点既不是导入元素，也不是别名元素，即普通的<Bean>元素，
+    // 按照Spring的Bean规则解析元素
+    else if (delegate.nodeNameEquals(ele, BEAN_ELEMENT)) {
+        processBeanDefinition(ele, delegate);
+    }
+    else if (delegate.nodeNameEquals(ele, NESTED_BEANS_ELEMENT)) {
+        // recurse
+        doRegisterBeanDefinitions(ele);
+    }
+}
+```
+
+> 可以使用< import>元素来导入IOC容器所需要的其他资源，spring IOC容器在解析时会首先将指定导入的资源加载进容器中。
+>
+> 使用< ailas>别名时，spring IOC容器首先将别名元素所定义的别名注册到容器中。
+>
+> 对于其他的普通< bean>元素的解析由BeanDefinitionParserDelegate类的parseDefaultElement()来实现。
+
+
+
+###### 12、载入< bean>元素
 
 
 

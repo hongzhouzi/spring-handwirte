@@ -450,6 +450,10 @@ initWebApplicationContext()
 
 > ApplicationContext允许上下文嵌套，通过保持父上下文可以维持一个上下文体系。对于bean的查找可以在这个上下文体系中发生，首先检查当前上下文，其次是父上下文，逐级向上，这样为不同的Spring应用提供了一个共享的bean定义环境。
 
+**类图**
+
+![ClassPathXmlApplicationContext类图](ssm.assets/ClassPathXmlApplicationContext类图.png)
+
 ###### 1、寻找入口
 
 ```java
@@ -461,6 +465,7 @@ ApplicationContext app = new ClassPathXmlApplicationContext("application.xml");
 **构造函数调用**
 
 ```java
+// ============ ClassPathXmlApplicationContext ============ 
 public ClassPathXmlApplicationContext(String configLocation) throws BeansException {
     this(new String[] {configLocation}, true, null);
 }
@@ -470,9 +475,11 @@ public ClassPathXmlApplicationContext(
     throws BeansException {
 	// 调用父类构造方法为容器设置好spring资源加载器
     super(parent);
+    // 【后面分析该方法】
     setConfigLocations(configLocations);
     if (refresh) {
         // 重启、刷新、重置
+        // 【后面分析该方法】
         refresh();
     }
 }
@@ -483,6 +490,7 @@ public ClassPathXmlApplicationContext(
 ###### 2、设置配置路径
 
 ```java
+// ============ ClassPathXmlApplicationContext ============ 
 // 解析Bean定义资源文件的路径，处理多个资源文件字符串数组
 public void setConfigLocations(@Nullable String... locations) {
    if (locations != null) {
@@ -506,6 +514,7 @@ public void setConfigLocations(@Nullable String... locations) {
 > spring对bean配置资源的载入是从refresh()开始的，refresh()是一个模板方法，规定了IOC容器的启动流程，有些逻辑交给子类去实现的。这儿ClassPathXmlApplicationContext通过调用父类AbstractApplicationContext#refresh()启动了IOC容器对bean的载入过程。
 
 ```java
+// ============ AbstractApplicationContext ============ 
 public void refresh() throws BeansException, IllegalStateException {
    synchronized (this.startupShutdownMonitor) {
       // Prepare this context for refreshing.
@@ -585,7 +594,7 @@ public void refresh() throws BeansException, IllegalStateException {
 ###### 4、创建容器
 
 ```java
-// AbstractApplicationContext#obtainFreshBeanFactory
+// ============ AbstractApplicationContext ============ 
 protected ConfigurableListableBeanFactory obtainFreshBeanFactory() {
    // 使用了【委派模式】，父类定义了抽象的refreshBeanFactory()方法，
    // 具体实现调用子类容器的refreshBeanFactory()方法
@@ -601,7 +610,7 @@ protected ConfigurableListableBeanFactory obtainFreshBeanFactory() {
 >
 > 疑问：为什么需要销毁后再创建，不能用之前的容器吗，为什么？
 ```java
-// AbstractRefreshableApplicationContext#refreshBeanFactory
+// ============ AbstractRefreshableApplicationContext ============ 
 protected final void refreshBeanFactory() throws BeansException {
    // 若已经有容器，则销毁容器中的bean，关闭容器
    if (hasBeanFactory()) {
@@ -616,6 +625,7 @@ protected final void refreshBeanFactory() throws BeansException {
       customizeBeanFactory(beanFactory);
       // 调用载入Bean定义的方法，又使用了【委派模式】，
       // 在当前类中只定义了抽象的loadBeanDefinitions方法，具体的实现调用子类容器
+       // 【后面分析该方法】
       loadBeanDefinitions(beanFactory);
       synchronized (this.beanFactoryMonitor) {
          this.beanFactory = beanFactory;
@@ -634,7 +644,10 @@ protected final void refreshBeanFactory() throws BeansException {
 > 准备用XmlBeanDefinitionReader解析xml，设置xml解析器相关信息
 
 ```java
-// AbstractXmlApplicationContext#loadBeanDefinitions(DefaultListableBeanFactory)
+// ============ AbstractXmlApplicationContext ============ 
+/**
+ * 实现父类抽象的载入Bean定义方法
+ */
 protected void loadBeanDefinitions(DefaultListableBeanFactory beanFactory) throws BeansException, IOException {
    // Create a new XmlBeanDefinitionReader for the given BeanFactory.
    // 创建XmlBeanDefinitionReader，即创建Bean读取器，并通过回调设置到容器中去，容  器使用该读取器读取Bean定义资源
@@ -655,6 +668,7 @@ protected void loadBeanDefinitions(DefaultListableBeanFactory beanFactory) throw
    // 当Bean读取器读取Bean定义的Xml资源文件时，启用Xml的校验机制
    initBeanDefinitionReader(beanDefinitionReader);
    // Bean读取器真正实现加载的方法
+   // 【后面分析该方法】
    loadBeanDefinitions(beanDefinitionReader);
 }
 ```
@@ -667,7 +681,9 @@ protected void loadBeanDefinitions(DefaultListableBeanFactory beanFactory) throw
 
 ```java
 // ================ AbstractXmlApplicationContext ================ 
-// Xml Bean读取器加载Bean定义资源
+/**
+ * Xml Bean读取器加载Bean定义资源
+ */
 protected void loadBeanDefinitions(XmlBeanDefinitionReader reader) throws BeansException, IOException {
    // 获取Bean定义资源的定位
    Resource[] configResources = getConfigResources();
@@ -1722,6 +1738,762 @@ public void registerBeanDefinition(String beanName, BeanDefinition beanDefinitio
 ```
 
 > 至此，bean配置信息被解析后已经注册到IOC容器中了，完成了IOC容器初始化所做的全部工作，这些注册的bean定义信息时IOC容器控制反转的基础，正是有了这些注册的数据，容器才可以进行依赖注入。
+
+
+
+##### 基于Annotation的IOC初始化
+
+###### Annotation的引入
+
+> 信息
+
+
+
+###### 1、定位bean扫描路径
+
+> spring中管理注解bean定义的容器有两个：AnnotationConfigApplicationContext、AnnotationConfigWebApplicationContext（AnnotationConfigApplicationContext的Web版本），两者用法和对注解的处理几乎没有差别。下面以AnnotationConfigApplicationContext为例进行分析。
+
+```java
+public class AnnotationConfigApplicationContext extends GenericApplicationContext implements AnnotationConfigRegistry {
+
+   // 保存一个读取注解的Bean定义读取器，并将其设置到容器中
+   private final AnnotatedBeanDefinitionReader reader;
+   // 保存一个扫描指定类路径中注解Bean定义的扫描器，并将其设置到容器中
+   private final ClassPathBeanDefinitionScanner scanner;
+    
+   /**
+    * 默认构造函数，初始化一个空容器，容器不包含任何 Bean 信息，需要稍后通过调用register()
+    * 注册配置类，并调用refresh()刷新容器，触发容器对注解Bean的载入、解析和注册过程
+    */
+   public AnnotationConfigApplicationContext() {
+      this.reader = new AnnotatedBeanDefinitionReader(this);
+      this.scanner = new ClassPathBeanDefinitionScanner(this);
+   }
+
+   public AnnotationConfigApplicationContext(DefaultListableBeanFactory beanFactory) {
+      super(beanFactory);
+      this.reader = new AnnotatedBeanDefinitionReader(this);
+      this.scanner = new ClassPathBeanDefinitionScanner(this);
+   }
+
+   /**
+    * 最常用的构造函数，通过将涉及到的配置类传递给该构造函数，以实现将相应配置类中的Bean自动注册到容器中
+    */
+   public AnnotationConfigApplicationContext(Class<?>... annotatedClasses) {
+      this();
+      register(annotatedClasses);
+      refresh();
+   }
+
+   /**
+    * 该构造函数会自动扫描以给定的包及其子包下的所有类，并自动识别所有的Spring Bean，将其注册到容器中
+    */
+   public AnnotationConfigApplicationContext(String... basePackages) {
+      this();
+      scan(basePackages);
+      refresh();
+   }
+
+   /**
+    * 为容器的注解Bean读取器和注解Bean扫描器设置Bean名称产生器
+    */
+   public void setBeanNameGenerator(BeanNameGenerator beanNameGenerator) {
+      this.reader.setBeanNameGenerator(beanNameGenerator);
+      this.scanner.setBeanNameGenerator(beanNameGenerator);
+      getBeanFactory().registerSingleton(
+            AnnotationConfigUtils.CONFIGURATION_BEAN_NAME_GENERATOR, beanNameGenerator);
+   }
+
+   /**
+    * 为容器的注解Bean读取器和注解Bean扫描器设置作用范围元信息解析器
+    */
+   public void setScopeMetadataResolver(ScopeMetadataResolver scopeMetadataResolver) {
+      this.reader.setScopeMetadataResolver(scopeMetadataResolver);
+      this.scanner.setScopeMetadataResolver(scopeMetadataResolver);
+   }
+
+
+   //---------------------------------------------------------------------
+   // Implementation of AnnotationConfigRegistry
+   //---------------------------------------------------------------------
+
+   /**
+    * 为容器注册一个要被处理的注解Bean，新注册的Bean，必须手动调用容器的
+    * refresh()方法刷新容器，触发容器对新注册的Bean的处理
+    */
+   @Override
+   public void register(Class<?>... annotatedClasses) {
+      Assert.notEmpty(annotatedClasses, "At least one annotated class must be specified");
+      this.reader.register(annotatedClasses);
+   }
+
+   /**
+    * 扫描指定包路径及其子包下的注解类，为了使新添加的类被处理，必须手动调用refresh()方法刷新容器
+    */
+   @Override
+   public void scan(String... basePackages) {
+      Assert.notEmpty(basePackages, "At least one base package must be specified");
+      this.scanner.scan(basePackages);
+   }
+	// ……
+}
+```
+
+> 通过以上分析可以看到spring对注解的处理方式分为两种：
+>
+> 1. 直接将注解bean注册到容器中
+>
+>    - 可以在初始化容器时注册；
+>    - 在容器创建之后调用注册方法向容器注册，然后刷新容器使得容器对注册的注解bean进行处理
+>
+> 2. 通过扫描指定的包和子包下的所有类将其注册到容器中
+>
+>    在初始化注解容器时指定要自动扫描的路径，若容器创建以后向给定路径动态添加了注解bean，则需要调用容器扫描的方法然后刷新容器，使得容器对所注册的bean进行处理。
+
+
+
+###### 2、读取Annotation元数据
+
+> 创建注解处理容器时若传入的初始参数是具体的注解bean定义类，则读取注解并注册。
+
+
+
+###### 2-1、通过调用注解bean定义读取
+
+```java
+// ========= AnnotationConfigApplicationContext =========== 
+/**
+ * 最常用的构造函数，通过将涉及到的配置类传递给该构造函数，以实现将相应配置类中的Bean自动注册到容器中
+ */
+public AnnotationConfigApplicationContext(Class<?>... annotatedClasses) {
+   this();
+   register(annotatedClasses);
+   refresh();
+}
+
+/**
+ * 为容器注册一个要被处理的注解Bean，新注册的Bean，必须手动调用容器的
+ * refresh()方法刷新容器，触发容器对新注册的Bean的处理
+ */
+@Override
+public void register(Class<?>... annotatedClasses) {
+    Assert.notEmpty(annotatedClasses, "At least one annotated class must be specified");
+    this.reader.register(annotatedClasses);
+}
+
+// ========= AnnotatedBeanDefinitionReader =========== 
+/**
+ * 注册多个注解Bean定义类
+ */
+public void register(Class<?>... annotatedClasses) {
+    for (Class<?> annotatedClass : annotatedClasses) {
+        registerBean(annotatedClass);
+    }
+}
+
+/**
+* 注册一个注解Bean定义类
+*/
+public void registerBean(Class<?> annotatedClass) {
+    doRegisterBean(annotatedClass, null, null, null);
+}
+
+/**
+ * Bean定义读取器向容器注册注解Bean定义类
+ */
+<T> void doRegisterBean(Class<T> annotatedClass, @Nullable Supplier<T> instanceSupplier, @Nullable String name,
+                        @Nullable Class<? extends Annotation>[] qualifiers, BeanDefinitionCustomizer... definitionCustomizers) {
+
+    // 根据指定的注解Bean定义类，创建Spring容器中对注解Bean的封装的数据结构
+    AnnotatedGenericBeanDefinition abd = new AnnotatedGenericBeanDefinition(annotatedClass);
+    if (this.conditionEvaluator.shouldSkip(abd.getMetadata())) {
+        return;
+    }
+
+    abd.setInstanceSupplier(instanceSupplier);
+
+    // ========第一步===========================
+    // 解析注解Bean定义的作用域，若@Scope("prototype")，则Bean为原型类型；若@Scope("singleton")，则Bean为单态类型
+    ScopeMetadata scopeMetadata = this.scopeMetadataResolver.resolveScopeMetadata(abd);
+    // 为注解Bean定义设置作用域
+    abd.setScope(scopeMetadata.getScopeName());
+    // 为注解Bean定义生成Bean名称
+    String beanName = (name != null ? name : this.beanNameGenerator.generateBeanName(abd, this.registry));
+
+    //========第二步===========================
+    // 处理注解Bean定义中的通用注解
+    AnnotationConfigUtils.processCommonDefinitionAnnotations(abd);
+    // 如果在向容器注册注解Bean定义时，使用了额外的限定符注解，则解析限定符注解。
+    // 主要是配置的关于autowiring自动依赖注入装配的限定条件，即@Qualifier注解
+    // Spring自动依赖注入装配默认是按类型装配，如果使用@Qualifier则按名称
+    if (qualifiers != null) {
+        for (Class<? extends Annotation> qualifier : qualifiers) {
+            // 如果配置了@Primary注解，设置该Bean为autowiring自动依赖注入装//配时的首选
+            if (Primary.class == qualifier) {
+                abd.setPrimary(true);
+            }
+            // 如果配置了@Lazy注解，则设置该Bean为非延迟初始化，如果没有配置则该Bean为预实例化
+            else if (Lazy.class == qualifier) {
+                abd.setLazyInit(true);
+            }
+            // 如果使用了除@Primary和@Lazy以外的其他注解，则为该Bean添加一个autowiring自动
+            // 依赖注入装配限定符，该Bean在进autowiring自动依赖注入装配时，根据名称装配限定符指定的Bean
+            else {
+                abd.addQualifier(new AutowireCandidateQualifier(qualifier));
+            }
+        }
+    }
+    for (BeanDefinitionCustomizer customizer : definitionCustomizers) {
+        customizer.customize(abd);
+    }
+
+    // 创建一个指定Bean名称的Bean定义对象，封装注解Bean定义类数据
+    BeanDefinitionHolder definitionHolder = new BeanDefinitionHolder(abd, beanName);
+    // ========第三步===========================
+    // 根据注解Bean定义类中配置的作用域，创建相应的代理对象
+    definitionHolder = AnnotationConfigUtils.applyScopedProxyMode(scopeMetadata, definitionHolder, this.registry);
+    // ========第四步===========================
+    // 向IOC容器注册注解Bean类定义对象
+    BeanDefinitionReaderUtils.registerBeanDefinition(definitionHolder, this.registry);
+}
+```
+
+> 通过以上可看出注册注解bean定义类的基本步骤：
+>
+> 1. 使用注解元数据解析器解析bean中关于作用域的配置
+> 2. 使用AnnotationConfigUtils.processCommonDefinitionAnnotations()处理通用的注解
+> 3. 使用AnnotationConfigUtils.applyScopedProxyMode()创建对于作用域的代理对象
+> 4. 使用BeanDefinitionReaderUtils.registerBeanDefinition()向容器注册bean
+
+
+
+###### 2-2、解析作用域元数据
+
+> 通过AnnotationScopeMetadataResolver#resolveScopeMetadata()解析注解bean定义类中的作用域元信息。即**判断注册的bean是原生类型(prototype)还是单例(singleton)类型**。
+
+```java
+// =========== AnnotationScopeMetadataResolver ============
+/**
+ * 解析注解Bean定义类中的作用域元信息
+ */
+@Override
+public ScopeMetadata resolveScopeMetadata(BeanDefinition definition) {
+   ScopeMetadata metadata = new ScopeMetadata();
+   if (definition instanceof AnnotatedBeanDefinition) {
+      AnnotatedBeanDefinition annDef = (AnnotatedBeanDefinition) definition;
+      // 从注解Bean定义类的属性中查找属性为”Scope”的值，即@Scope注解的值
+      // AnnotationConfigUtils.attributesFor()方法将Bean中所有的注解和值存放在一个map集合中
+      // AnnotationAttributes 继承于LinkedHashMap
+      AnnotationAttributes attributes = AnnotationConfigUtils.attributesFor(
+            annDef.getMetadata(), this.scopeAnnotationType);
+      // 将获取到的@Scope注解的值设置到要返回的对象中
+      if (attributes != null) {
+         metadata.setScopeName(attributes.getString("value"));
+         // 获取@Scope注解中的proxyMode属性值，在创建代理对象时会用到
+         ScopedProxyMode proxyMode = attributes.getEnum("proxyMode");
+         // 如果@Scope的proxyMode属性为DEFAULT或者NO
+         if (proxyMode == ScopedProxyMode.DEFAULT) {
+            // 设置proxyMode为NO
+            proxyMode = this.defaultProxyMode;
+         }
+         // 为返回的元数据设置proxyMode
+         metadata.setScopedProxyMode(proxyMode);
+      }
+   }
+   // 返回解析的作用域元信息对象
+   return metadata;
+}
+```
+
+
+
+###### 2-3、解析通用注解
+
+> AnnotationConfigUtils.processCommonDefinitionAnnotations
+
+```java
+public static void processCommonDefinitionAnnotations(AnnotatedBeanDefinition abd) {
+    processCommonDefinitionAnnotations(abd, abd.getMetadata());
+}
+
+/**
+ * 处理Bean定义中通用注解
+ */
+static void processCommonDefinitionAnnotations(AnnotatedBeanDefinition abd, AnnotatedTypeMetadata metadata) {
+    AnnotationAttributes lazy = attributesFor(metadata, Lazy.class);
+    // 如果Bean定义中有@Lazy注解，则将该Bean预实例化属性设置为@lazy注解的值
+    if (lazy != null) {
+        abd.setLazyInit(lazy.getBoolean("value"));
+    }
+
+    else if (abd.getMetadata() != metadata) {
+        lazy = attributesFor(abd.getMetadata(), Lazy.class);
+        if (lazy != null) {
+            abd.setLazyInit(lazy.getBoolean("value"));
+        }
+    }
+    // 如果Bean定义中有@Primary注解，则为该Bean设置为autowiring自动依赖注入装配的首选对象
+    if (metadata.isAnnotated(Primary.class.getName())) {
+        abd.setPrimary(true);
+    }
+    // 如果Bean定义中有@DependsOn注解，则为该Bean设置所依赖的Bean名称，
+    // 容器将确保在实例化该Bean之前首先实例化所依赖的Bean
+    AnnotationAttributes dependsOn = attributesFor(metadata, DependsOn.class);
+    if (dependsOn != null) {
+        abd.setDependsOn(dependsOn.getStringArray("value"));
+    }
+
+    if (abd instanceof AbstractBeanDefinition) {
+        AbstractBeanDefinition absBd = (AbstractBeanDefinition) abd;
+        AnnotationAttributes role = attributesFor(metadata, Role.class);
+        if (role != null) {
+            absBd.setRole(role.getNumber("value").intValue());
+        }
+        AnnotationAttributes description = attributesFor(metadata, Description.class);
+        if (description != null) {
+            absBd.setDescription(description.getString("value"));
+        }
+    }
+}
+```
+
+
+
+###### 2-4、创建作用域代理对象
+
+> 根据注解bean定义类中配置的作用域@Scope注解的值为bean定义应用相应的代理模式，主要是在spring的aop中使用。
+
+```java
+/**
+ * 根据作用域为Bean应用引用的代理模式
+ */
+static BeanDefinitionHolder applyScopedProxyMode(
+      ScopeMetadata metadata, BeanDefinitionHolder definition, BeanDefinitionRegistry registry) {
+
+   // 获取注解Bean定义类中@Scope注解的proxyMode属性值
+   ScopedProxyMode scopedProxyMode = metadata.getScopedProxyMode();
+   // 如果配置的@Scope注解的proxyMode属性值为NO，则不应用代理模式
+   if (scopedProxyMode.equals(ScopedProxyMode.NO)) {
+      return definition;
+   }
+   // 获取配置的@Scope注解的proxyMode属性值，如果为TARGET_CLASS则返回true，如果为INTERFACES，则返回false
+   boolean proxyTargetClass = scopedProxyMode.equals(ScopedProxyMode.TARGET_CLASS);
+   // 为注册的Bean创建相应模式的代理对象
+   return ScopedProxyCreator.createScopedProxy(definition, registry, proxyTargetClass);
+}
+```
+
+
+
+###### 2-5、向容器注册bean对象
+
+> 校验BeanDefinition信息，然后将bean添加到容器中一个管理BeanDefinition的hashmap中。
+
+```java
+/**
+ * 将解析的BeanDefinitionHold注册到容器中
+ */
+public static void registerBeanDefinition(
+      BeanDefinitionHolder definitionHolder, BeanDefinitionRegistry registry)
+      throws BeanDefinitionStoreException {
+
+   // Register bean definition under primary name.
+   // 获取解析的BeanDefinition的名称
+   String beanName = definitionHolder.getBeanName();
+   // 向IOC容器注册BeanDefinition，默认调用 DefaultListableBeanFactory 中的方法
+   registry.registerBeanDefinition(beanName, definitionHolder.getBeanDefinition());
+
+   // Register aliases for bean name, if any.
+   // 如果解析的BeanDefinition有别名，向容器为其注册别名
+   String[] aliases = definitionHolder.getAliases();
+   if (aliases != null) {
+      for (String alias : aliases) {
+         registry.registerAlias(beanName, alias);
+      }
+   }
+}
+```
+
+
+
+###### 3、扫描指定包并解析为BeanDefinition
+
+> AnnotationConfigApplicationContext通过调用类路径Bean定义扫描器ClassPathBeanDefinitionScanner扫描给定包及其子包下的所有类。
+
+
+
+###### 3-1、扫描给定的包及其子包
+
+> 在ClassPathBeanDefinitionScanner中扫描给定的包和子包中的注解，并注册到IOC容器中，重点在doScanner()中
+
+```java
+// ========== ClassPathBeanDefinitionScanner ========== 
+public class ClassPathBeanDefinitionScanner extends ClassPathScanningCandidateComponentProvider {
+    /**
+	 * 创建一个类路径Bean定义扫描器
+	 */
+	public ClassPathBeanDefinitionScanner(BeanDefinitionRegistry registry) {
+		this(registry, true);
+	}
+    
+    /**
+	 * 为容器创建一个类路径Bean定义扫描器，并指定是否使用默认的扫描过滤规则。
+	 * 即Spring默认扫描配置：@Component、@Repository、@Service、@Controller
+	 * 注解的Bean，同时也支持JavaEE6的@ManagedBean和JSR-330的@Named注解
+	 */
+	public ClassPathBeanDefinitionScanner(BeanDefinitionRegistry registry, boolean useDefaultFilters) {
+		this(registry, useDefaultFilters, getOrCreateEnvironment(registry));
+	}
+    
+    public ClassPathBeanDefinitionScanner(BeanDefinitionRegistry registry, boolean useDefaultFilters,
+			Environment environment) {
+
+		this(registry, useDefaultFilters, environment,
+				(registry instanceof ResourceLoader ? (ResourceLoader) registry : null));
+	}
+    
+    public ClassPathBeanDefinitionScanner(BeanDefinitionRegistry registry, boolean useDefaultFilters,
+			Environment environment, @Nullable ResourceLoader resourceLoader) {
+
+		Assert.notNull(registry, "BeanDefinitionRegistry must not be null");
+		// 为容器设置加载Bean定义的注册器
+		this.registry = registry;
+
+		if (useDefaultFilters) {
+			registerDefaultFilters();
+		}
+		setEnvironment(environment);
+		// 为容器设置资源加载器
+		setResourceLoader(resourceLoader);
+	}
+    
+    /**
+	 * 调用类路径Bean定义扫描器入口方法
+	 */
+	public int scan(String... basePackages) {
+		// 获取容器中已经注册的Bean个数
+		int beanCountAtScanStart = this.registry.getBeanDefinitionCount();
+
+		// 启动扫描器扫描给定包
+		doScan(basePackages);
+
+		// Register annotation config processors, if necessary.
+		// 注册注解配置(Annotation config)处理器
+		if (this.includeAnnotationConfig) {
+			AnnotationConfigUtils.registerAnnotationConfigProcessors(this.registry);
+		}
+
+		// 返回注册的Bean个数
+		return (this.registry.getBeanDefinitionCount() - beanCountAtScanStart);
+	}
+    
+    // ==================== 重点 ===================
+   /**
+	 * 类路径Bean定义扫描器扫描给定包及其子包
+	 */
+	protected Set<BeanDefinitionHolder> doScan(String... basePackages) {
+		Assert.notEmpty(basePackages, "At least one base package must be specified");
+		// 创建一个集合，存放扫描到Bean定义的封装类
+		Set<BeanDefinitionHolder> beanDefinitions = new LinkedHashSet<>();
+		// 遍历扫描所有给定的包
+		for (String basePackage : basePackages) {
+			// 调用父类ClassPathScanningCandidateComponentProvider的方法扫描给定类路径，获取符合条件的Bean定义
+			Set<BeanDefinition> candidates = findCandidateComponents(basePackage);
+			// 遍历扫描到的Bean
+			for (BeanDefinition candidate : candidates) {
+				// 获取Bean定义类中@Scope注解的值，即获取Bean的作用域
+				ScopeMetadata scopeMetadata = this.scopeMetadataResolver.resolveScopeMetadata(candidate);
+				// 为Bean设置注解配置的作用域
+				candidate.setScope(scopeMetadata.getScopeName());
+				// 为Bean生成名称
+                // 【需要自定义生成bean名称生成规则的就重写AnnotationBeanNameGenerator中该方法】
+				String beanName = this.beanNameGenerator.generateBeanName(candidate, this.registry);
+				// 如果扫描到的Bean不是Spring的注解Bean，则为Bean设置默认值，
+				// 设置Bean的自动依赖注入装配属性等
+				if (candidate instanceof AbstractBeanDefinition) {
+					postProcessBeanDefinition((AbstractBeanDefinition) candidate, beanName);
+				}
+				// 如果扫描到的Bean是Spring的注解Bean，则处理其通用的Spring注解
+				if (candidate instanceof AnnotatedBeanDefinition) {
+					// 处理注解Bean中通用的注解，在分析注解Bean定义类读取器时已经分析过
+					AnnotationConfigUtils.processCommonDefinitionAnnotations((AnnotatedBeanDefinition) candidate);
+				}
+				// 根据Bean名称检查指定的Bean是否需要在容器中注册，或者在容器中冲突
+				if (checkCandidate(beanName, candidate)) {
+					BeanDefinitionHolder definitionHolder = new BeanDefinitionHolder(candidate, beanName);
+					// 根据注解中配置的作用域，为Bean应用相应的代理模式
+					definitionHolder =
+							AnnotationConfigUtils.applyScopedProxyMode(scopeMetadata, definitionHolder, this.registry);
+					beanDefinitions.add(definitionHolder);
+					// 向容器注册扫描到的Bean
+					registerBeanDefinition(definitionHolder, this.registry);
+				}
+			}
+		}
+		return beanDefinitions;
+	}
+    
+    // ……
+}
+```
+
+
+
+###### 3-2、扫描给定路径
+
+> 调用父类ClassPathScanningCandidateComponentProvider的方法扫描给定类路径，获取符合条件的Bean定义
+
+```java
+// ======= ClassPathScanningCandidateComponentProvider ==
+/**
+ * 扫描给定类路径的包
+ */
+public Set<BeanDefinition> findCandidateComponents(String basePackage) {
+   if (this.componentsIndex != null && indexSupportsIncludeFilters()) {
+      return addCandidateComponentsFromIndex(this.componentsIndex, basePackage);
+   }
+   else {
+      return scanCandidateComponents(basePackage);
+   }
+}
+
+private Set<BeanDefinition> addCandidateComponentsFromIndex(CandidateComponentsIndex index, String basePackage) {
+    // 创建存储扫描到的类的集合
+    Set<BeanDefinition> candidates = new LinkedHashSet<>();
+    try {
+        Set<String> types = new HashSet<>();
+        for (TypeFilter filter : this.includeFilters) {
+            String stereotype = extractStereotype(filter);
+            if (stereotype == null) {
+                throw new IllegalArgumentException("Failed to extract stereotype from "+ filter);
+            }
+            types.addAll(index.getCandidateTypes(basePackage, stereotype));
+        }
+        boolean traceEnabled = logger.isTraceEnabled();
+        boolean debugEnabled = logger.isDebugEnabled();
+        for (String type : types) {
+            // 为指定资源获取元数据读取器，元信息读取器通过汇编(ASM)读//取资源元信息
+            MetadataReader metadataReader = getMetadataReaderFactory().getMetadataReader(type);
+            // 如果扫描到的类符合容器配置的过滤规则
+            // 【后面分析该方法】
+            if (isCandidateComponent(metadataReader)) {
+                // 通过汇编(ASM)读取资源字节码中的Bean定义元信息
+                AnnotatedGenericBeanDefinition sbd = new AnnotatedGenericBeanDefinition(
+                    metadataReader.getAnnotationMetadata());
+                // 【后面分析该方法】
+                if (isCandidateComponent(sbd)) {
+                    if (debugEnabled) {
+                        logger.debug("Using candidate component class from index: " + type);
+                    }
+                    candidates.add(sbd);
+                }
+                // logger……
+            }
+            // logger……
+        }
+    }
+    catch (IOException ex) {
+        throw new BeanDefinitionStoreException("I/O failure during classpath scanning", ex);
+    }
+    return candidates;
+}
+
+private Set<BeanDefinition> scanCandidateComponents(String basePackage) {
+    Set<BeanDefinition> candidates = new LinkedHashSet<>();
+    try {
+        String packageSearchPath = ResourcePatternResolver.CLASSPATH_ALL_URL_PREFIX +
+            resolveBasePackage(basePackage) + '/' + this.resourcePattern;
+        // 根据包搜索路径获取资源
+        Resource[] resources = getResourcePatternResolver().getResources(packageSearchPath);
+        boolean traceEnabled = logger.isTraceEnabled();
+        boolean debugEnabled = logger.isDebugEnabled();
+        for (Resource resource : resources) {
+            if (traceEnabled) {
+                logger.trace("Scanning " + resource);
+            }
+            if (resource.isReadable()) {
+                try {
+                    MetadataReader metadataReader = getMetadataReaderFactory().getMetadataReader(resource);
+                    // 判断元信息读取器读取的类是否符合容器定义的注解过滤规则
+                    if (isCandidateComponent(metadataReader)) {
+                        ScannedGenericBeanDefinition sbd = new ScannedGenericBeanDefinition(metadataReader);
+                        sbd.setResource(resource);
+                        sbd.setSource(resource);
+                        // 判断该bean定义是否可作为候选
+                        if (isCandidateComponent(sbd)) {
+                            candidates.add(sbd);
+                        }
+                        // logger……
+                    }
+                    // logger……
+                }
+                catch (Throwable ex) {
+                    throw new BeanDefinitionStoreException("……" + resource, ex);
+                }
+            }
+            // logger……
+        }
+    }
+    catch (IOException ex) {
+        throw new BeanDefinitionStoreException("I/O failure during classpath scanning", ex);
+    }
+    return candidates;
+}
+
+// ========== 下面这部分是ClassPathScanningComponentProvider的父类ClassPathScanningCandidateComponentProvider中的部分，在ClassPathScanningComponentProvider构造方法中初始化了过滤规则和排除的注解
+// 保存过滤规则要包含的注解，即Spring默认的@Component、@Repository、@Service、
+// @Controller注解的Bean，以及JavaEE6的@ManagedBean和JSR-330的@Named注解
+private final List<TypeFilter> includeFilters = new LinkedList<>();
+// 保存过滤规则要排除的注解
+private final List<TypeFilter> excludeFilters = new LinkedList<>();
+/**
+ * 向容器注册过滤规则
+ */
+@SuppressWarnings("unchecked")
+protected void registerDefaultFilters() {
+    // 向要包含的过滤规则中添加@Component注解类，注意Spring中@Repository
+    // @Service和@Controller都是Component，因为这些注解都添加了@Component注解
+    this.includeFilters.add(new AnnotationTypeFilter(Component.class));
+    // 获取当前类的类加载器
+    ClassLoader cl = ClassPathScanningCandidateComponentProvider.class.getClassLoader();
+    try {
+        // 向要包含的过滤规则添加JavaEE6的@ManagedBean注解
+        this.includeFilters.add(new AnnotationTypeFilter(
+            ((Class<? extends Annotation>) ClassUtils.forName("javax.annotation.ManagedBean", cl)), false));
+        logger.debug("JSR-250 'javax.annotation.ManagedBean' found and supported for component scanning");
+    }
+    catch (ClassNotFoundException ex) {
+        // JSR-250 1.1 API (as included in Java EE 6) not available - simply skip.
+    }
+    try {
+        // 向要包含的过滤规则添加@Named注解
+        this.includeFilters.add(new AnnotationTypeFilter(
+            ((Class<? extends Annotation>) ClassUtils.forName("javax.inject.Named", cl)), false));
+        logger.debug("JSR-330 'javax.inject.Named' annotation found and supported for component scanning");
+    }
+    catch (ClassNotFoundException ex) {
+        // JSR-330 API not available - simply skip.
+    }
+}
+// ========== end
+
+/**
+ * 判断元信息读取器读取的类是否符合容器定义的注解过滤规则
+ */
+protected boolean isCandidateComponent(MetadataReader metadataReader) throws IOException {
+    // 如果读取的类的注解在排除注解过滤规则中，返回false
+    for (TypeFilter tf : this.excludeFilters) {
+        if (tf.match(metadataReader, getMetadataReaderFactory())) {
+            return false;
+        }
+    }
+    // 如果读取的类的注解在包含的注解的过滤规则中，则返回ture
+    for (TypeFilter tf : this.includeFilters) {
+        if (tf.match(metadataReader, getMetadataReaderFactory())) {
+            return isConditionMatch(metadataReader);
+        }
+    }
+    // 如果读取的类的注解既不在排除规则，也不在包含规则中，则返回false
+    return false;
+}
+
+/**
+ * 默认实现检查类是否不是接口或抽象类、不依赖于封闭类、可以在子类中被重写。
+ */
+protected boolean isCandidateComponent(AnnotatedBeanDefinition beanDefinition) {
+    AnnotationMetadata metadata = beanDefinition.getMetadata();
+    return (metadata.isIndependent() && (metadata.isConcrete() ||
+                                         (metadata.isAbstract() && metadata.hasAnnotatedMethods(Lookup.class.getName()))));
+}
+```
+
+
+
+###### 4、注册注解BeanDefinition
+
+> AnnotationConfigWebApplicationContext 对于注解bean定义的载入与非web版稍有不同，如下：
+>
+> 非web版是GenericApplicationContext的子类，在刷新容器时没有loadBeanDefinitions()，loadBeanDefinitions是用载入资源用的，而非web版本直接通过配置的方式确定了资源的位置，就不需要从web中找资源然后载入了。
+>
+> （暂时这样理解的，后面还需要在验证一下，另外比较两者的UML类图，各自在什么情况下会用）
+
+```java
+ // ======== AnnotationConfigWebApplicationContext  ===
+/**
+ * 载入注解Bean定义资源
+ */
+@Override
+protected void loadBeanDefinitions(DefaultListableBeanFactory beanFactory) {
+   // 为容器设置注解Bean定义读取器
+   AnnotatedBeanDefinitionReader reader = getAnnotatedBeanDefinitionReader(beanFactory);
+   // 为容器设置类路径Bean定义扫描器
+   ClassPathBeanDefinitionScanner scanner = getClassPathBeanDefinitionScanner(beanFactory);
+
+   // 获取容器的Bean名称生成器
+   BeanNameGenerator beanNameGenerator = getBeanNameGenerator();
+   // 为注解Bean定义读取器和类路径扫描器设置Bean名称生成器
+   if (beanNameGenerator != null) {
+      reader.setBeanNameGenerator(beanNameGenerator);
+      scanner.setBeanNameGenerator(beanNameGenerator);
+      beanFactory.registerSingleton(AnnotationConfigUtils.CONFIGURATION_BEAN_NAME_GENERATOR, beanNameGenerator);
+   }
+
+   // 获取容器的作用域元信息解析器
+   ScopeMetadataResolver scopeMetadataResolver = getScopeMetadataResolver();
+   // 为注解Bean定义读取器和类路径扫描器设置作用域元信息解析器
+   if (scopeMetadataResolver != null) {
+      reader.setScopeMetadataResolver(scopeMetadataResolver);
+      scanner.setScopeMetadataResolver(scopeMetadataResolver);
+   }
+
+   if (!this.annotatedClasses.isEmpty()) {
+      if (logger.isInfoEnabled()) {
+         logger.info("Registering annotated classes: [" +
+               StringUtils.collectionToCommaDelimitedString(this.annotatedClasses) + "]");
+      }
+      reader.register(this.annotatedClasses.toArray(new Class<?>[this.annotatedClasses.size()]));
+   }
+
+   if (!this.basePackages.isEmpty()) {
+      if (logger.isInfoEnabled()) {
+         logger.info("Scanning base packages: [" +
+               StringUtils.collectionToCommaDelimitedString(this.basePackages) + "]");
+      }
+      scanner.scan(this.basePackages.toArray(new String[this.basePackages.size()]));
+   }
+
+   // 获取容器定义的Bean定义资源路径
+   String[] configLocations = getConfigLocations();
+   if (configLocations != null) {
+      for (String configLocation : configLocations) {
+         try {
+            // 使用当前容器的类加载器加载定位路径的字节码类文件
+            Class<?> clazz = ClassUtils.forName(configLocation, getClassLoader());
+            if (logger.isInfoEnabled()) {
+               logger.info("Successfully resolved class for [" + configLocation + "]");
+            }
+            reader.register(clazz);
+         }
+         catch (ClassNotFoundException ex) {
+            if (logger.isDebugEnabled()) {
+               logger.debug("Could not load class for config location [" + configLocation +
+                     "] - trying package scan. " + ex);
+            }
+            // 如果容器类加载器加载定义路径的Bean定义资源失败则启用容器类路径扫描器扫描给定路径包及其子包中的类
+            int count = scanner.scan(configLocation);
+            if (logger.isInfoEnabled()) {
+               if (count == 0) {
+                  logger.info("No annotated classes found for specified class/package [" + configLocation + "]");
+               }
+               else {
+                  logger.info("Found " + count + " annotated classes in package [" + configLocation + "]");
+               }
+            }
+         }
+      }
+   }
+}
+```
 
 
 

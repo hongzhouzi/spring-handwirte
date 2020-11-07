@@ -4289,16 +4289,18 @@ private Object doGetObjectFromFactoryBean(final FactoryBean<?> factory, final St
 
 ##### 必须明白的几个概念
 
-> 1. 切面（Aspect）：面向规则，具有相同规则的方法集合体
+> 1. 切面（Aspect）：面向规则，具有相同规则的方法集合体< aop:aspect>
 > 2. 通知（Advice）：回调
 > 3. 切入点（Point）：需要代理的具体方法
 > 4. 目标对象（Target Object）：被代理的对象
-> 5. AOP代理（AOP Proxy）：
-> 6. 前置通知
-> 7. 后置通知
-> 8. 返回后通知
-> 9. 环绕通知
-> 10. 异常通知
+> 5. AOP代理（AOP Proxy）：重新生成的代理对象，模式使用jdk动态代理，配置< aop:config>的proxy-target-class=true则使用CGLib动态代理
+> 6. 前置通知（Before Advice）：某个连接点之前执行的通知，在< aop:aspect>中< aop:before>
+> 7. 后置通知（After Advice）：某连接点退出时执行的通知（正常或异常退出都会执行）< aop:after>
+> 8. 返回后通知（After Return Advice）：某连接点正常完成后执行的通知，不包括抛出异常的情况，在< aop:aspect>中< after-returning>
+> 9. 环绕通知（Before Advice）：包围一个连接点的通知，可以在方法的调用前后完成自定义的行为，也可以选择不执行，在< aop:aspect>中< aop:around>
+> 10. 异常通知（Before Advice）：在方法抛出异常退出时执行的通知，在< aop:aspect>中< after-throwing>
+>
+> 可以将多个通知应用到一个目标对象上。使用aop可以基于xml配置的方式也可以使用注解方式。
 
 
 
@@ -4313,7 +4315,8 @@ private Object doGetObjectFromFactoryBean(final FactoryBean<?> factory, final St
 > 3. 调用方法
 > 4. 触发通知
 
-
+> Spring的aop是通过BeanPostProcessor后置处理器（监听容器触发bean声明周期事件的监听器）开始的，后置处理器向容器注册以后，容器中管理的bean就具备了接收IOC容器事件回调的能力。
+>
 
 
 

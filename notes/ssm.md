@@ -4073,7 +4073,213 @@ public void preInstantiateSingletons() throws BeansException {
 >
 > 当用户使用容器本身时，可以使用转义字符“&”来得到FactoryBean本身。比如fbA是一个FactoryBean对象，它产生a这个bean对象，使用&fbA取到的是fbA对象本身而不是a。
 
+###### FactoryBean
 
+```java
+/**
+ * 工厂Bean，用于产生其他对象
+ */
+public interface FactoryBean<T> {
+
+	/**
+	 * 获取容器管理的对象实例
+	 */
+	@Nullable
+	T getObject() throws Exception;
+
+	/**
+	 * 获取Bean工厂创建的对象的类型
+	 */
+	@Nullable
+	Class<?> getObjectType();
+
+	/**
+	 * Bean工厂创建的对象是否是单例模式，
+	 * 若是则整个容器中只有一个实例对象，每次请求都返回同一个实例对象
+	 */
+	default boolean isSingleton() {
+		return true;
+	}
+
+}
+```
+
+###### AbstractBeanFactory#doGetBean()调用FactoryBean
+
+> 在容器实例化bean并进行依赖注入过程时，在getBean()触发实例化bean的时候会调用AbstractBeanFactory的doGetBean()中调用getObjectForBeanInstance()来进行实例化的过程。
+
+```java
+/**
+ * 获取给定Bean的实例对象，主要是完成FactoryBean的相关处理
+ */
+protected Object getObjectForBeanInstance(
+      Object beanInstance, String name, String beanName, @Nullable RootBeanDefinition mbd) {
+
+   // Don't let calling code try to dereference the factory if the bean isn't a factory.
+   /*
+   容器已经得到了Bean实例对象，这个实例对象可能是一个普通的Bean，
+   也可能是一个工厂Bean，如果是一个工厂Bean，则使用它创建一个Bean实例对象，
+   如果调用本身就想获得一个容器的引用，则指定返回这个工厂Bean实例对象
+   如果指定的名称是容器的解引用(dereference，即是对象本身而非内存地址)，
+   且Bean实例也不是创建Bean实例对象的工厂Bean
+    */
+   if (BeanFactoryUtils.isFactoryDereference(name) && !(beanInstance instanceof FactoryBean)) {
+      throw new BeanIsNotAFactoryException(transformedBeanName(name), beanInstance.getClass());
+   }
+
+   // Now we have the bean instance, which may be a normal bean or a FactoryBean.
+   // If it's a FactoryBean, we use it to create a bean instance, unless the
+   // caller actually wants a reference to the factory.
+   // 如果Bean实例不是工厂Bean，或者指定名称是容器的解引用，
+   // 调用者向获取对容器的引用，则直接返回当前的Bean实例
+   if (!(beanInstance instanceof FactoryBean) || BeanFactoryUtils.isFactoryDereference(name)) {
+      return beanInstance;
+   }
+
+   // 处理指定名称不是容器的解引用，或者根据名称获取的Bean实例对象是一个工厂Bean
+   // 使用工厂Bean创建一个Bean的实例对象
+   Object object = null;
+   if (mbd == null) {
+      // 从Bean工厂缓存中获取给定名称的Bean实例对象
+      object = getCachedObjectForFactoryBean(beanName);
+   }
+   // 让Bean工厂生产给定名称的Bean对象实例
+   if (object == null) {
+      // Return bean instance from factory.
+      FactoryBean<?> factory = (FactoryBean<?>) beanInstance;
+      // Caches object obtained from FactoryBean if it is a singleton.
+      // 如果从Bean工厂生产的Bean是单态模式的，则缓存
+      if (mbd == null && containsBeanDefinition(beanName)) {
+         // 从容器中获取指定名称的Bean定义，如果继承基类，则合并基类相关属性
+         mbd = getMergedLocalBeanDefinition(beanName);
+      }
+      // 如果从容器得到Bean定义信息，并且Bean定义信息不是虚构的，则让工厂Bean生产Bean实例对象
+      boolean synthetic = (mbd != null && mbd.isSynthetic());
+      // 调用FactoryBeanRegistrySupport类的getObjectFromFactoryBean方法，
+      // 实现工厂Bean生产Bean对象实例的过程
+       // 【后面会分析】
+      object = getObjectFromFactoryBean(factory, beanName, !synthetic);
+   }
+   return object;
+}
+```
+
+> 在上面方法中会调用FactoryBeanRegistrySupport#getObjectForFactoryBean()，该方法实现了Bean工厂生产bean实例对象。
+
+
+
+```java
+/**
+ * Bean工厂生产Bean实例对象
+ */
+protected Object getObjectFromFactoryBean(FactoryBean<?> factory, String beanName, boolean shouldPostProcess) {
+   // Bean工厂是单态模式，并且Bean工厂缓存中存在指定名称的Bean实例对象
+   if (factory.isSingleton() && containsSingleton(beanName)) {
+      synchronized (getSingletonMutex()) {
+         // 直接从Bean工厂缓存中获取指定名称的Bean实例对象
+         Object object = this.factoryBeanObjectCache.get(beanName);
+         // Bean工厂缓存中没有指定名称的实例对象，则生产该实例对象
+         if (object == null) {
+            // 调用Bean工厂的getObject方法生产指定Bean的实例对象
+            // 【】
+            object = doGetObjectFromFactoryBean(factory, beanName);
+            // Only post-process and store if not put there already during getObject() call above
+            // (e.g. because of circular reference processing triggered by custom getBean calls)
+            Object alreadyThere = this.factoryBeanObjectCache.get(beanName);
+            if (alreadyThere != null) {
+               object = alreadyThere;
+            }
+            else {
+               if (shouldPostProcess) {
+                  try {
+                     object = postProcessObjectFromFactoryBean(object, beanName);
+                  }
+                  catch (Throwable ex) {
+                     throw new BeanCreationException(beanName,
+                           "Post-processing of FactoryBean's singleton object failed", ex);
+                  }
+               }
+               // 将生产的实例对象添加到Bean工厂缓存中
+               this.factoryBeanObjectCache.put(beanName, object);
+            }
+         }
+         return object;
+      }
+   }
+   // 调用Bean工厂的getObject方法生产指定Bean的实例对象
+   else {
+      Object object = doGetObjectFromFactoryBean(factory, beanName);
+      if (shouldPostProcess) {
+         try {
+            object = postProcessObjectFromFactoryBean(object, beanName);
+         }
+         catch (Throwable ex) {
+            throw new BeanCreationException(beanName, "Post-processing of FactoryBean's object failed", ex);
+         }
+      }
+      return object;
+   }
+}
+```
+
+
+
+```java
+/**
+ * 调用Bean工厂的getObject方法生产指定Bean的实例对象
+ */
+private Object doGetObjectFromFactoryBean(final FactoryBean<?> factory, final String beanName)
+      throws BeanCreationException {
+
+   Object object;
+   try {
+      if (System.getSecurityManager() != null) {
+         AccessControlContext acc = getAccessControlContext();
+         try {
+            // 实现PrivilegedExceptionAction接口的匿名内置类
+            // 根据JVM检查权限，然后决定BeanFactory创建实例对象
+            object = AccessController.doPrivileged((PrivilegedExceptionAction<Object>) () ->
+                  factory.getObject(), acc);
+         }
+         catch (PrivilegedActionException pae) {
+            throw pae.getException();
+         }
+      }
+      else {
+         // 调用BeanFactory接口实现类的创建对象方法
+         object = factory.getObject();
+      }
+   }
+   catch (FactoryBeanNotInitializedException ex) {
+      throw new BeanCurrentlyInCreationException(beanName, ex.toString());
+   }
+   catch (Throwable ex) {
+      throw new BeanCreationException(beanName, "FactoryBean threw exception on object creation", ex);
+   }
+
+   // Do not accept a null value for a FactoryBean that's not fully
+   // initialized yet: Many FactoryBeans just return null then.
+   // 创建出来的实例对象为null，或者因为单态对象正在创建而返回null
+   if (object == null) {
+      if (isSingletonCurrentlyInCreation(beanName)) {
+         throw new BeanCurrentlyInCreationException(
+               beanName, "FactoryBean which is currently in creation returned null from getObject");
+      }
+      object = new NullBean();
+   }
+   return object;
+}
+```
+
+> 可看出，BeanFactory接口调用其实现类的getObject()来实现创建bean实例对象的功能。
+
+
+
+###### 生产Bean实例对象
+
+> FactoryBean的实现类有非常多，如Proxy、RMI、ServletContextFactoryBean等等，FactoryBean接口为Spring容器提供了一个很好的封装机制，具体的getObject()有不同的实现类，根据不同的实现策略来具体提供。
+
+> 还不太明白FactoryBean和创建bean时是否会用到它之间的关系。
 
 
 

@@ -4301,6 +4301,28 @@ private Object doGetObjectFromFactoryBean(final FactoryBean<?> factory, final St
 > 10. 异常通知（Before Advice）：在方法抛出异常退出时执行的通知，在< aop:aspect>中< after-throwing>
 >
 > 可以将多个通知应用到一个目标对象上。使用aop可以基于xml配置的方式也可以使用注解方式。
+>
+> 切面表达式：
+>
+> execution(modifiers-pattern?   ret-type-pattern   declaring-type-pattern?   name-pattern(param-pattern)   throws-pattern? )
+>
+> - modifiers-pattern:方法的操作权限（可选）
+>
+> - ret-type-pattern：返回值（**必选**）
+> - declaring-type-pattern：方法所在的包（可选）
+> - name-pattern方法名（**必选**）
+> - param-pattern：参数名（可选）
+> - throws-pattern：异常（可选）
+>
+> ```xml
+> execution(* com.spring..*Service.*(..))
+> 在com.spring下任意包，任意以Service结尾，返回类型为任意类型，方法名任意，参数不做限制的所有方法。
+> 
+> execution(* com.spring.service.*.*(..))
+> 在com.spring.service包下，返回类型为任意类型，方法名任意，参数不做限制的所有方法。
+> ```
+>
+> 
 
 
 
@@ -4308,7 +4330,7 @@ private Object doGetObjectFromFactoryBean(final FactoryBean<?> factory, final St
 
 
 
-主要流程
+##### 主要流程
 
 > 1. 寻找入口
 > 2. 选择策略
@@ -4317,6 +4339,774 @@ private Object doGetObjectFromFactoryBean(final FactoryBean<?> factory, final St
 
 > Spring的aop是通过BeanPostProcessor后置处理器（监听容器触发bean声明周期事件的监听器）开始的，后置处理器向容器注册以后，容器中管理的bean就具备了接收IOC容器事件回调的能力。
 >
+
+**BeanPostProcessor**
+
+> 里面两个回调的入口和容器管理的bean的生命周期事件紧密相关，可以为用户提供在spring IOC容器初始化bean过程中自定义的处理操作。
+
+```java
+public interface BeanPostProcessor {
+   /**
+    * 为在Bean的初始化前提供回调入口
+    */
+   @Nullable
+   default Object postProcessBeforeInitialization(Object bean, String beanName) throws BeansException {
+      return bean;
+   }
+
+   /**
+    * 为在Bean的初始化之后提供回调入口
+    */
+   @Nullable
+   default Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
+      return bean;
+   }
+}
+```
+
+
+
+##### 1、对容器生成的bean添加后置处理器
+
+> BeanPostProcessor后置处理器的调用发生在容器完成对bean实例对象的创建和属性的依赖注入完成之后。
+
+```java
+// ========== AbstractAutowireCapableBeanFactory ========== 
+/**
+ * 真正创建Bean的方法
+ */
+protected Object doCreateBean(final String beanName, final RootBeanDefinition mbd, final @Nullable Object[] args)
+      throws BeanCreationException {
+	// 创建Bean的实例对象……
+   // Initialize the bean instance.
+    // Bean对象的初始化，依赖注入在此触发
+    // 这个exposedObject在初始化完成之后返回作为依赖注入完成后的Bean
+    Object exposedObject = bean;
+    try {
+        // 将Bean实例对象封装，并且Bean定义中配置的属性值赋值给实例对象
+        populateBean(beanName, mbd, instanceWrapper);
+        // 初始化Bean对象
+        // 【BeanPostProcessor】后置处理器入口
+        exposedObject = initializeBean(beanName, exposedObject, mbd);
+    }
+    // ……
+   return exposedObject;
+}
+
+/**
+ * 初始容器创建的Bean实例对象，为其添加BeanPostProcessor后置处理器
+ */
+protected Object initializeBean(final String beanName, final Object bean, @Nullable RootBeanDefinition mbd) {
+    // JDK的安全机制验证权限
+    if (System.getSecurityManager() != null) {
+        // 实现PrivilegedAction接口的匿名内部类
+        AccessController.doPrivileged((PrivilegedAction<Object>) () -> {
+            invokeAwareMethods(beanName, bean);
+            return null;
+        }, getAccessControlContext());
+    }
+    else {
+        // 为Bean实例对象包装相关属性，如名称，类加载器，所属容器等信息
+        invokeAwareMethods(beanName, bean);
+    }
+
+    Object wrappedBean = bean;
+    // 对BeanPostProcessor后置处理器的postProcessBeforeInitialization
+    // 回调方法的调用，为Bean实例初始化前做一些处理
+    // 【下面会分析】
+    if (mbd == null || !mbd.isSynthetic()) {
+        wrappedBean = applyBeanPostProcessorsBeforeInitialization(wrappedBean, beanName);
+    }
+
+    // 调用Bean实例对象初始化的方法，这个初始化方法是在Spring Bean定义配置
+    // 文件中通过init-method属性指定的
+    try {
+        invokeInitMethods(beanName, wrappedBean, mbd);
+    }
+    catch (Throwable ex) {
+        throw new BeanCreationException(
+            (mbd != null ? mbd.getResourceDescription() : null),
+            beanName, "Invocation of init method failed", ex);
+    }
+    // 对BeanPostProcessor后置处理器的postProcessAfterInitialization
+    // 回调方法的调用，为Bean实例初始化之后做一些处理
+    // 【下面会分析】
+    if (mbd == null || !mbd.isSynthetic()) {
+        wrappedBean = applyBeanPostProcessorsAfterInitialization(wrappedBean, beanName);
+    }
+
+    return wrappedBean;
+}
+
+@Override
+/**
+ * 调用BeanPostProcessor后置处理器实例对象初始化【之前】的处理方法
+ */
+public Object applyBeanPostProcessorsBeforeInitialization(Object existingBean, String beanName)
+    throws BeansException {
+    Object result = existingBean;
+    // 遍历容器为所创建的Bean添加的所有BeanPostProcessor后置处理器
+    for (BeanPostProcessor beanProcessor : getBeanPostProcessors()) {
+        // 调用Bean实例所有的后置处理中的初始化前处理方法，为Bean实例对象在初始化之前做一些自定义的处理操作
+        Object current = beanProcessor.postProcessBeforeInitialization(result, beanName);
+        if (current == null) {
+            return result;
+        }
+        result = current;
+    }
+    return result;
+}
+
+@Override
+/**
+ * 调用BeanPostProcessor后置处理器实例对象初始化【之后】的处理方法
+ */
+public Object applyBeanPostProcessorsAfterInitialization(Object existingBean, String beanName)
+    throws BeansException {
+
+    Object result = existingBean;
+    // 遍历容器为所创建的Bean添加的所有BeanPostProcessor后置处理器
+    for (BeanPostProcessor beanProcessor : getBeanPostProcessors()) {
+        // 调用Bean实例所有的后置处理中的初始化后处理方法，为Bean实例对象在初始化之后做一些自定义的处理操作
+        Object current = beanProcessor.postProcessAfterInitialization(result, beanName);
+        if (current == null) {
+            return result;
+        }
+        result = current;
+    }
+    return result;
+}
+```
+
+> BeanPostProcessor接口中初始化前的操作方法和初始化后的操作方法均委托子类实现。它实现子类非常多，分别完成不同的操作，如：aop的注册通知适配器、bean对象的数据校验、bean继承属性、方法的合并等。
+
+
+
+##### 2、找到哪些方法需要代理
+
+> 创建aop代理对象的子类AbstractAutoProxyCreator重写了后置处理器中的方法。
+>
+> ？？？怎么突然就到这儿来了
+
+```java
+// ========== AbstractAutoProxyCreator ========== 
+@Override
+public Object postProcessBeforeInitialization(Object bean, String beanName) {
+   return bean;
+}
+
+/**
+ * Create a proxy with the configured interceptors if the bean is
+ * identified as one to proxy by the subclass.
+ * @see #getAdvicesAndAdvisorsForBean
+ */
+@Override
+public Object postProcessAfterInitialization(@Nullable Object bean, String beanName) throws BeansException {
+   if (bean != null) {
+      Object cacheKey = getCacheKey(bean.getClass(), beanName);
+      if (!this.earlyProxyReferences.contains(cacheKey)) {
+          // 【下面会分析】
+         return wrapIfNecessary(bean, beanName, cacheKey);
+      }
+   }
+   return bean;
+}
+
+protected Object wrapIfNecessary(Object bean, String beanName, Object cacheKey) {
+    if (StringUtils.hasLength(beanName) && this.targetSourcedBeans.contains(beanName)) {
+        return bean;
+    }
+
+    // 判断是否不应该代理这个bean
+    if (Boolean.FALSE.equals(this.advisedBeans.get(cacheKey))) {
+        return bean;
+    }
+    /*
+    判断是否是一些InfrastructureClass或者是否应该跳过这个bean。
+    所谓InfrastructureClass就是指Advice/PointCut/Advisor等接口的实现类。
+    shouldSkip默认实现为返回false,由于是protected方法，子类可以覆盖。
+    */
+    if (isInfrastructureClass(bean.getClass()) || shouldSkip(bean.getClass(), beanName)) {
+        this.advisedBeans.put(cacheKey, Boolean.FALSE);
+        return bean;
+    }
+
+    // 获取这个bean的advice
+    // Create proxy if we have advice.
+    // 【扫描所有的相关的方法（PointCut原始方法，哪些方法需要被代理）】
+    Object[] specificInterceptors = getAdvicesAndAdvisorsForBean(bean.getClass(), beanName, null);
+    if (specificInterceptors != DO_NOT_PROXY) {
+        this.advisedBeans.put(cacheKey, Boolean.TRUE);
+        // 【创建代理】
+        Object proxy = createProxy(
+            bean.getClass(), beanName, specificInterceptors, new SingletonTargetSource(bean));
+        this.proxyTypes.put(cacheKey, proxy.getClass());
+        return proxy;
+    }
+
+    this.advisedBeans.put(cacheKey, Boolean.FALSE);
+    return bean;
+}
+```
+> 找到所有可以作用于该bean的advisers
+
+```java
+// ========== AbstractAdvisorAutoProxyCreator ==========
+@Override
+@Nullable
+protected Object[] getAdvicesAndAdvisorsForBean(Class<?> beanClass, String beanName, @Nullable TargetSource targetSource) {
+    // 【】
+   List<Advisor> advisors = findEligibleAdvisors(beanClass, beanName);
+   if (advisors.isEmpty()) {
+      return DO_NOT_PROXY;
+   }
+   return advisors.toArray();
+}
+
+protected List<Advisor> findEligibleAdvisors(Class<?> beanClass, String beanName) {
+    // 找到所有合格的advisers
+    List<Advisor> candidateAdvisors = findCandidateAdvisors();
+    // 找到所有可以作用于该bean的advisers
+    List<Advisor> eligibleAdvisors = findAdvisorsThatCanApply(candidateAdvisors, beanClass, beanName);
+    extendAdvisors(eligibleAdvisors);
+    if (!eligibleAdvisors.isEmpty()) {
+        // 设置排序
+        eligibleAdvisors = sortAdvisors(eligibleAdvisors);
+    }
+    return eligibleAdvisors;
+}
+```
+
+
+
+##### 3、选择代理策略
+
+> 准备创建代理对象，并选择合适的代理策略
+
+```java
+/*
+ * 创建代理
+ */
+protected Object createProxy(Class<?> beanClass, @Nullable String beanName,
+                             @Nullable Object[] specificInterceptors, TargetSource targetSource) {
+
+    if (this.beanFactory instanceof ConfigurableListableBeanFactory) {
+        AutoProxyUtils.exposeTargetClass((ConfigurableListableBeanFactory) this.beanFactory, beanName, beanClass);
+    }
+
+    ProxyFactory proxyFactory = new ProxyFactory();
+    proxyFactory.copyFrom(this);
+
+    if (!proxyFactory.isProxyTargetClass()) {
+        if (shouldProxyTargetClass(beanClass, beanName)) {
+            proxyFactory.setProxyTargetClass(true);
+        }
+        else {
+            evaluateProxyInterfaces(beanClass, proxyFactory);
+        }
+    }
+
+    Advisor[] advisors = buildAdvisors(beanName, specificInterceptors);
+    proxyFactory.addAdvisors(advisors);
+    proxyFactory.setTargetSource(targetSource);
+    customizeProxyFactory(proxyFactory);
+
+    proxyFactory.setFrozen(this.freezeProxy);
+    if (advisorsPreFiltered()) {
+        proxyFactory.setPreFiltered(true);
+    }
+
+    // 获取aop代理bean
+    return proxyFactory.getProxy(getProxyClassLoader());
+}
+```
+
+> 获取代理bean时调用的DefaultAopProxyFactory的createAopProxy()选择代理策略
+
+```java
+public class DefaultAopProxyFactory implements AopProxyFactory, Serializable {
+
+    @Override
+    public AopProxy createAopProxy(AdvisedSupport config) throws AopConfigException {
+       if (config.isOptimize() || config.isProxyTargetClass() || hasNoUserSuppliedProxyInterfaces(config)) {
+			Class<?> targetClass = config.getTargetClass();
+			if (targetClass == null) {
+				throw new AopConfigException("TargetSource cannot determine target class: " +
+						"Either an interface or a target is required for proxy creation.");
+			}
+			// 使用jdk动态代理策略
+			if (targetClass.isInterface() || Proxy.isProxyClass(targetClass)) {
+				return new JdkDynamicAopProxy(config);
+			}
+			// 使用cglib动态代理策略
+			return new ObjenesisCglibAopProxy(config);
+		}
+		else {
+			// 使用jdk动态代理策略
+			return new JdkDynamicAopProxy(config);
+		}
+    }
+    private boolean hasNoUserSuppliedProxyInterfaces(AdvisedSupport config) {
+        Class<?>[] ifcs = config.getProxiedInterfaces();
+        return (ifcs.length == 0 || (ifcs.length == 1 && SpringProxy.class.isAssignableFrom(ifcs[0])));
+    }
+}
+```
+
+
+
+##### 4、调用代理方法
+
+> 先看基于jdk的动态代理
+
+```java
+final class JdkDynamicAopProxy implements AopProxy, InvocationHandler, Serializable {
+    @Override
+	public Object getProxy() {
+		return getProxy(ClassUtils.getDefaultClassLoader());
+	}
+
+	/**
+	 * 获取代理类要实现的接口,除了Advised对象中配置的,还会加上SpringProxy, Advised(opaque=false)
+	 * 检查上面得到的接口中有没有定义 equals或者hashcode的接口
+	 * 调用Proxy.newProxyInstance创建代理对象
+	 */
+	@Override
+	public Object getProxy(@Nullable ClassLoader classLoader) {
+		if (logger.isDebugEnabled()) {
+			logger.debug("Creating JDK dynamic proxy: target source is " + this.advised.getTargetSource());
+		}
+		Class<?>[] proxiedInterfaces = AopProxyUtils.completeProxiedInterfaces(this.advised, true);
+		findDefinedEqualsAndHashCodeMethods(proxiedInterfaces);
+		return Proxy.newProxyInstance(classLoader, proxiedInterfaces, this);
+	}
+    
+    /**
+	 * Implementation of {@code InvocationHandler.invoke}.
+	 * <p>Callers will see exactly the exception thrown by the target,
+	 * unless a hook method throws an exception.
+	 */
+	@Override
+	@Nullable
+	public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+		MethodInvocation invocation;
+		Object oldProxy = null;
+		boolean setProxyContext = false;
+
+		TargetSource targetSource = this.advised.targetSource;
+		Object target = null;
+
+		try {
+			// eqauls()方法，具目标对象未实现此方法
+			if (!this.equalsDefined && AopUtils.isEqualsMethod(method)) {
+				// The target does not implement the equals(Object) method itself.
+				return equals(args[0]);
+			}
+			// hashCode()方法，具目标对象未实现此方法
+			else if (!this.hashCodeDefined && AopUtils.isHashCodeMethod(method)) {
+				// The target does not implement the hashCode() method itself.
+				return hashCode();
+			}
+			else if (method.getDeclaringClass() == DecoratingProxy.class) {
+				// There is only getDecoratedClass() declared -> dispatch to proxy config.
+				return AopProxyUtils.ultimateTargetClass(this.advised);
+			}
+			// Advised接口或者其父接口中定义的方法,直接反射调用,不应用通知
+			else if (!this.advised.opaque && method.getDeclaringClass().isInterface() &&
+					method.getDeclaringClass().isAssignableFrom(Advised.class)) {
+				// Service invocations on ProxyConfig with the proxy config...
+				return AopUtils.invokeJoinpointUsingReflection(this.advised, method, args);
+			}
+
+			Object retVal;
+
+			if (this.advised.exposeProxy) {
+				// Make invocation available if necessary.
+				oldProxy = AopContext.setCurrentProxy(proxy);
+				setProxyContext = true;
+			}
+
+			// Get as late as possible to minimize the time we "own" the target,
+			// in case it comes from a pool.
+			// 获得目标对象的类
+			target = targetSource.getTarget();
+			Class<?> targetClass = (target != null ? target.getClass() : null);
+
+			// Get the interception chain for this method.
+			// 【获取可以应用到此方法上的Interceptor列表】
+			List<Object> chain = this.advised.getInterceptorsAndDynamicInterceptionAdvice(method, targetClass);
+
+			// Check whether we have any advice. If we don't, we can fallback on direct
+			// reflective invocation of the target, and avoid creating a MethodInvocation.
+			// 如果没有可以应用到此方法的通知(Interceptor)，此直接反射调用 method.invoke(target, args)
+			if (chain.isEmpty()) {
+				// We can skip creating a MethodInvocation: just invoke the target directly
+				// Note that the final invoker must be an InvokerInterceptor so we know it does
+				// nothing but a reflective operation on the target, and no hot swapping or fancy proxying.
+				Object[] argsToUse = AopProxyUtils.adaptArgumentsIfNecessary(method, args);
+				retVal = AopUtils.invokeJoinpointUsingReflection(target, method, argsToUse);
+			}
+			else {
+				// We need to create a method invocation...
+				// 创建MethodInvocation
+				invocation = new ReflectiveMethodInvocation(proxy, target, method, args, targetClass, chain);
+				// Proceed to the joinpoint through the interceptor chain.
+                // 【反射执行JoinPoint】
+				retVal = invocation.proceed();
+			}
+
+			// Massage return value if necessary.
+			Class<?> returnType = method.getReturnType();
+			if (retVal != null && retVal == target &&
+					returnType != Object.class && returnType.isInstance(proxy) &&
+					!RawTargetAccess.class.isAssignableFrom(method.getDeclaringClass())) {
+				// Special case: it returned "this" and the return type of the method
+				// is type-compatible. Note that we can't help if the target sets
+				// a reference to itself in another returned object.
+				retVal = proxy;
+			}
+			else if (retVal == null && returnType != Void.TYPE && returnType.isPrimitive()) {
+				throw new AopInvocationException(
+						"Null return value from advice does not match primitive return type for: " + method);
+			}
+			return retVal;
+		}
+		finally {
+			if (target != null && !targetSource.isStatic()) {
+				// Must have come from TargetSource.
+				targetSource.releaseTarget(target);
+			}
+			if (setProxyContext) {
+				// Restore old proxy.
+				AopContext.setCurrentProxy(oldProxy);
+			}
+		}
+	}
+    // ……
+}
+```
+
+> jdk动态代理核心之一就是InvocationHandler接口，生成的代理对象的方法调用都会委托到InvocationHandler.invoke()处理。
+>
+> 织入主要思路：
+>
+> 1. 获取应用到此方法上的通知链（Interceptor Chain）
+> 2. 若有通知，则应用通知并执行JoinPoint；若无通知，则直接返回执行JoinPoint
+
+##### 5、获取通知器链
+
+> 在调用代理方法中需要获取通知器链。
+>
+> 在AopProxy代理对象配置拦截器的实现中，有一个取得拦截器的配置过程，这个过程是由DefaultAdvisorChainFactory实现的，这个工厂类负责生成拦截器链，在getInterceptorsAndDynamicInterceptionAdvice()中，有一个适配器和注册过程，通知配置spring预先设计好的拦截器，spring加入了它对aop实现的处理。
+
+```java
+// ========== AdvisedSupport ==========
+public List<Object> getInterceptorsAndDynamicInterceptionAdvice(Method method, @Nullable Class<?> targetClass) {
+   MethodCacheKey cacheKey = new MethodCacheKey(method);
+   // 从缓存中获取
+   List<Object> cached = this.methodCache.get(cacheKey);
+   // 缓存未命中，则进行下一步处理
+   if (cached == null) {
+      // 获取所有的拦截器
+      cached = this.advisorChainFactory.getInterceptorsAndDynamicInterceptionAdvice(
+            this, method, targetClass);
+      // 存入缓存
+      this.methodCache.put(cacheKey, cached);
+   }
+   return cached;
+}
+
+// ========== DefaultAdvisorChainFactory ==========
+/**
+ * 从提供的配置实例config中获取advisor列表,遍历处理这些advisor.如果是IntroductionAdvisor,
+ * 则判断此Advisor能否应用到目标类targetClass上.如果是PointcutAdvisor,则判断此Advisor能否
+ * 应用到目标方法method上.将满足条件的Advisor通过AdvisorAdaptor转化成Interceptor列表返回.
+ */
+@Override
+public List<Object> getInterceptorsAndDynamicInterceptionAdvice(
+    Advised config, Method method, @Nullable Class<?> targetClass) {
+
+    // This is somewhat tricky... We have to process introductions first,
+    // but we need to preserve order in the ultimate list.
+    List<Object> interceptorList = new ArrayList<>(config.getAdvisors().length);
+    Class<?> actualClass = (targetClass != null ? targetClass : method.getDeclaringClass());
+    // 查看是否包含IntroductionAdvisor
+    boolean hasIntroductions = hasMatchingIntroductions(config, actualClass);
+    // 这里实际上注册一系列AdvisorAdapter,用于将Advisor转化成MethodInterceptor
+    // 【】
+    AdvisorAdapterRegistry registry = GlobalAdvisorAdapterRegistry.getInstance();
+
+    for (Advisor advisor : config.getAdvisors()) {
+        if (advisor instanceof PointcutAdvisor) {
+            // Add it conditionally.
+            PointcutAdvisor pointcutAdvisor = (PointcutAdvisor) advisor;
+            if (config.isPreFiltered() || pointcutAdvisor.getPointcut().getClassFilter().matches(actualClass)) {
+                // 这个地方这两个方法的位置可以互换下
+                // 将Advisor转化成Interceptor
+                // 【】
+                MethodInterceptor[] interceptors = registry.getInterceptors(advisor);
+                // 检查当前advisor的pointcut是否可以匹配当前方法
+                MethodMatcher mm = pointcutAdvisor.getPointcut().getMethodMatcher();
+                if (MethodMatchers.matches(mm, method, actualClass, hasIntroductions)) {
+                    if (mm.isRuntime()) {
+                        // Creating a new object instance in the getInterceptors() method
+                        // isn't a problem as we normally cache created chains.
+                        for (MethodInterceptor interceptor : interceptors) {
+                            interceptorList.add(new InterceptorAndDynamicMethodMatcher(interceptor, mm));
+                        }
+                    }
+                    else {
+                        interceptorList.addAll(Arrays.asList(interceptors));
+                    }
+                }
+            }
+        }
+        else if (advisor instanceof IntroductionAdvisor) {
+            IntroductionAdvisor ia = (IntroductionAdvisor) advisor;
+            if (config.isPreFiltered() || ia.getClassFilter().matches(actualClass)) {
+                Interceptor[] interceptors = registry.getInterceptors(advisor);
+                interceptorList.addAll(Arrays.asList(interceptors));
+            }
+        }
+        else {
+            Interceptor[] interceptors = registry.getInterceptors(advisor);
+            interceptorList.addAll(Arrays.asList(interceptors));
+        }
+    }
+
+    return interceptorList;
+}
+```
+
+> 上面方法执行完后Advised中配置能够应用到连接点（JoinPoint）或者目标类（Target Object）的Advisor全部被转化成了MethodInterceptor。
+
+
+
+**GlobalAdvisorAdapterRegistry**
+
+> GlobalAdvisorAdapterRegistry 负责拦截器的适配和注册过程，起到了适配器和单例模式的作用，提供了一个DefaultAdvisorAdapterRegistry，它用来完成各种通知的适配和注册过程。
+
+```java
+public abstract class GlobalAdvisorAdapterRegistry {
+
+   /**
+    * Keep track of a single instance so we can return it to classes that request it.
+    */
+   private static AdvisorAdapterRegistry instance = new DefaultAdvisorAdapterRegistry();
+
+   public static AdvisorAdapterRegistry getInstance() {
+      return instance;
+   }
+
+   /**
+    * Reset the singleton {@link DefaultAdvisorAdapterRegistry}, removing any
+    * {@link AdvisorAdapterRegistry#registerAdvisorAdapter(AdvisorAdapter) registered}
+    * adapters.
+    */
+   static void reset() {
+      instance = new DefaultAdvisorAdapterRegistry();
+   }
+
+}
+```
+
+
+
+**DefaultAdvisorAdapterRegistry**
+
+> DefaultAdvisorAdapterRegistry 设置了一系列配置，正是这些适配器的实现为aop提供了编织能力。下面将以MethodBeforeAdviceAdapter进行分析
+
+```java
+public class DefaultAdvisorAdapterRegistry implements AdvisorAdapterRegistry, Serializable {
+
+	private final List<AdvisorAdapter> adapters = new ArrayList<>(3);
+
+	/**
+	 * Create a new DefaultAdvisorAdapterRegistry, registering well-known adapters.
+	 */
+	public DefaultAdvisorAdapterRegistry() {
+        // 【】
+		registerAdvisorAdapter(new MethodBeforeAdviceAdapter());
+		registerAdvisorAdapter(new AfterReturningAdviceAdapter());
+		registerAdvisorAdapter(new ThrowsAdviceAdapter());
+	}
+
+	@Override
+	public Advisor wrap(Object adviceObject) throws UnknownAdviceTypeException {
+		if (adviceObject instanceof Advisor) {
+			return (Advisor) adviceObject;
+		}
+		if (!(adviceObject instanceof Advice)) {
+			throw new UnknownAdviceTypeException(adviceObject);
+		}
+		Advice advice = (Advice) adviceObject;
+		if (advice instanceof MethodInterceptor) {
+			// So well-known it doesn't even need an adapter.
+			return new DefaultPointcutAdvisor(advice);
+		}
+		for (AdvisorAdapter adapter : this.adapters) {
+			// Check that it is supported.
+			if (adapter.supportsAdvice(advice)) {
+				return new DefaultPointcutAdvisor(advice);
+			}
+		}
+		throw new UnknownAdviceTypeException(advice);
+	}
+
+	@Override
+	public MethodInterceptor[] getInterceptors(Advisor advisor) throws UnknownAdviceTypeException {
+		List<MethodInterceptor> interceptors = new ArrayList<>(3);
+		Advice advice = advisor.getAdvice();
+		if (advice instanceof MethodInterceptor) {
+			interceptors.add((MethodInterceptor) advice);
+		}
+		for (AdvisorAdapter adapter : this.adapters) {
+			if (adapter.supportsAdvice(advice)) {
+				interceptors.add(adapter.getInterceptor(advisor));
+			}
+		}
+		if (interceptors.isEmpty()) {
+			throw new UnknownAdviceTypeException(advisor.getAdvice());
+		}
+		return interceptors.toArray(new MethodInterceptor[interceptors.size()]);
+	}
+
+	@Override
+	public void registerAdvisorAdapter(AdvisorAdapter adapter) {
+		this.adapters.add(adapter);
+	}
+
+}
+```
+
+**MethodBeforeAdviceAdapter**
+
+```java
+class MethodBeforeAdviceAdapter implements AdvisorAdapter, Serializable {
+
+   @Override
+   public boolean supportsAdvice(Advice advice) {
+      return (advice instanceof MethodBeforeAdvice);
+   }
+
+   @Override
+   public MethodInterceptor getInterceptor(Advisor advisor) {
+      MethodBeforeAdvice advice = (MethodBeforeAdvice) advisor.getAdvice();
+      return new MethodBeforeAdviceInterceptor(advice);
+   }
+
+}
+```
+
+**MethodBeforeAdviceInterceptor**
+
+```java
+public class MethodBeforeAdviceInterceptor implements MethodInterceptor, Serializable {
+
+   private MethodBeforeAdvice advice;
+   /**
+    * Create a new MethodBeforeAdviceInterceptor for the given advice.
+    * @param advice the MethodBeforeAdvice to wrap
+    */
+   public MethodBeforeAdviceInterceptor(MethodBeforeAdvice advice) {
+      Assert.notNull(advice, "Advice must not be null");
+      this.advice = advice;
+   }
+
+   @Override
+    // 【！！】
+   public Object invoke(MethodInvocation mi) throws Throwable {
+      this.advice.before(mi.getMethod(), mi.getArguments(), mi.getThis() );
+      return mi.proceed();
+   }
+}
+```
+
+> 可以看到invoke()中，先触发advice.before()回调，然后再是proceed
+
+
+
+##### 6、触发拦截器执行
+
+> 获取到通知器链后，如果通知器链不为空，则触发拦截器链的执行。
+
+```java
+// ========== ReflectiveMethodInvocation ==========
+@Override
+@Nullable
+public Object proceed() throws Throwable {
+   // We start with an index of -1 and increment early.
+      // 如果Interceptor执行完了，则执行joinPoint
+      if (this.currentInterceptorIndex == this.interceptorsAndDynamicMethodMatchers.size() - 1) {
+         return invokeJoinpoint();
+      }
+
+      Object interceptorOrInterceptionAdvice =
+            this.interceptorsAndDynamicMethodMatchers.get(++this.currentInterceptorIndex);
+      // 如果要动态匹配joinPoint
+      if (interceptorOrInterceptionAdvice instanceof InterceptorAndDynamicMethodMatcher) {
+         // Evaluate dynamic method matcher here: static part will already have
+         // been evaluated and found to match.
+         InterceptorAndDynamicMethodMatcher dm =
+               (InterceptorAndDynamicMethodMatcher) interceptorOrInterceptionAdvice;
+         // 动态匹配：运行时参数是否满足匹配条件
+         if (dm.methodMatcher.matches(this.method, this.targetClass, this.arguments)) {
+            return dm.interceptor.invoke(this);
+         }
+         else {
+            // Dynamic matching failed.
+            // Skip this interceptor and invoke the next in the chain.
+            // 动态匹配失败时,略过当前Intercetpor,调用下一个Interceptor
+            return proceed();
+         }
+   }
+   else {
+      // It's an interceptor, so we just invoke it: The pointcut will have
+      // been evaluated statically before this object was constructed.
+      // 执行当前Intercetpor
+      return ((MethodInterceptor) interceptorOrInterceptionAdvice).invoke(this);
+   }
+}
+```
+
+
+
+##### 7、反射调用JoinPoint
+
+> 拦截器执行完了后，就调用JoinPoint
+
+```java
+protected Object invokeJoinpoint() throws Throwable {
+   return AopUtils.invokeJoinpointUsingReflection(this.target, this.method, this.arguments);
+}
+
+@Nullable
+public static Object invokeJoinpointUsingReflection(@Nullable Object target, Method method, Object[] args)
+    throws Throwable {
+
+    // Use reflection to invoke the method.
+    try {
+        ReflectionUtils.makeAccessible(method);
+        return method.invoke(target, args);
+    }
+    catch (InvocationTargetException ex) {
+        // Invoked method threw a checked exception.
+        // We must rethrow it. The client won't see the interceptor.
+        throw ex.getTargetException();
+    }
+    catch (IllegalArgumentException ex) {
+        throw new AopInvocationException("AOP configuration seems to be invalid: tried calling method [" +
+                                         method + "] on target [" + target + "]", ex);
+    }
+    catch (IllegalAccessException ex) {
+        throw new AopInvocationException("Could not access method [" + method + "]", ex);
+    }
+}
+```
+
+
+
+
 
 
 

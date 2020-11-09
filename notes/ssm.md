@@ -4486,7 +4486,50 @@ public Object applyBeanPostProcessorsAfterInitialization(Object existingBean, St
 
 > 创建aop代理对象的子类AbstractAutoProxyCreator重写了后置处理器中的方法。
 >
-> ？？？怎么突然就到这儿来了
+> ---------
+>
+> spring加载完xml配置文件，会对配置文件中的标签进行解析，spring默认会加载自己的解析器，这些解析器散布在各个不同的jar包中(资源文件下的spring.handlers)。那些配置文件中的handlers就是spring对默认标签的处理器。
+>
+> **组件注册：**
+>
+> 全局搜索：component-scan，可以发现在ContextNamespaceHandler#init()中注册了该解析器。ContextNamespaceHandler在spring-context模块中的资源文件下的spring.handlers中配置了的。spring在解析标签时，通过实现NamespaceHandlerResolver接口的**DefaultNamespaceHandlerResolver**加载所有classpath下的spring.handlers文件中的映射，并在解析标签时，寻找这些标签对应的处理器，然后用这些处理器来处理标签。
+>
+> aop处理器注册：
+>
+> 在spring-aop模块资源资源文件中找到spring.handlers，里面配置了AopNamespaceHandler，看到AopNamespaceHandler#init()发现里面注册了“aspectj-autoproxy”标签解析器，看到AspectJAutoProxyBeanDefinitionParser#parse()。
+>
+> ```java
+> // ========== AspectJAutoProxyBeanDefinitionParser ==========
+> @Override
+> @Nullable
+> public BeanDefinition parse(Element element, ParserContext parserContext) {
+>     // 【】
+>   AopNamespaceUtils.registerAspectJAnnotationAutoProxyCreatorIfNecessary(parserContext, element);
+>     extendBeanDefinition(element, parserContext);
+>     return null;
+> }
+> 
+> // ========== AopNamespaceUtils ==========
+> public static void registerAspectJAnnotationAutoProxyCreatorIfNecessary(
+>     ParserContext parserContext, Element sourceElement) {
+> 
+>     // 使用注册AnnotationAwareAspectJAutoProxyCreator
+>     BeanDefinition beanDefinition = AopConfigUtils.registerAspectJAnnotationAutoProxyCreatorIfNecessary(
+>         parserContext.getRegistry(), parserContext.extractSource(sourceElement));
+>     useClassProxyingIfNecessary(parserContext.getRegistry(), sourceElement);
+>     registerComponentIfNecessary(beanDefinition, parserContext);
+> }
+> 
+> @Nullable
+> public static BeanDefinition registerAspectJAnnotationAutoProxyCreatorIfNecessary(BeanDefinitionRegistry registry,
+>                                                                                   @Nullable Object source) {
+> 
+>     return registerOrEscalateApcAsRequired(AnnotationAwareAspectJAutoProxyCreator.class, registry, source);
+> }
+> 
+> ```
+>
+> AnnotationAwareAspectJAutoProxyCreator是AbstractAutoProxyCreator的子类，AbstractAutoProxyCreator中写了很多aop相关的通用方法。
 
 ```java
 // ========== AbstractAutoProxyCreator ========== 
@@ -5106,11 +5149,357 @@ public static Object invokeJoinpointUsingReflection(@Nullable Object target, Met
 
 
 
+##### 总结
+
+> 
+
+
+
+### MVC运行时序图
+
+
+
+##### 1、初始化阶段
+
+> 在DispatcherServlet类中寻找init()，但其init()在父类HTTPServletBean中。
+
+```java
+// ========== HttpServletBean ========== 
+@Override
+public final void init() throws ServletException {
+	// ……
+   // Set bean properties from init parameters.
+   PropertyValues pvs = new ServletConfigPropertyValues(getServletConfig(), this.requiredProperties);
+   if (!pvs.isEmpty()) {
+      try {
+         // 定位资源
+         BeanWrapper bw = PropertyAccessorFactory.forBeanPropertyAccess(this);
+         // 加载配置信息
+         ResourceLoader resourceLoader = new ServletContextResourceLoader(getServletContext());
+         bw.registerCustomEditor(Resource.class, new ResourceEditor(resourceLoader, getEnvironment()));
+         initBeanWrapper(bw);
+         bw.setPropertyValues(pvs, true);
+      }
+      catch (BeansException ex) {
+         // ……
+         throw ex;
+      }
+   }
+
+   // Let subclasses do whatever initialization they like.
+   // 【通过它最终会调用refresh()】
+   initServletBean();
+
+   // ……
+}
+
+// ========== HttpServletBean的子类FrameworkServlet ==========
+@Override
+protected final void initServletBean() throws ServletException {
+    // ……logger
+    long startTime = System.currentTimeMillis();
+    try {
+        // 【】
+        this.webApplicationContext = initWebApplicationContext();
+        initFrameworkServlet();
+    }
+    // ……logger
+}
+
+protected WebApplicationContext initWebApplicationContext() {
+
+    // 先从ServletContext中获得父容器WebApplicationContext
+    WebApplicationContext rootContext =
+        WebApplicationContextUtils.getWebApplicationContext(getServletContext());
+    // 声明子容器
+    WebApplicationContext wac = null;
+
+    // 建立父、子容器之间的关联关系
+    if (this.webApplicationContext != null) {
+        // A context instance was injected at construction time -> use it
+        wac = this.webApplicationContext;
+        if (wac instanceof ConfigurableWebApplicationContext) {
+            ConfigurableWebApplicationContext cwac = (ConfigurableWebApplicationContext) wac;
+            if (!cwac.isActive()) {
+                // The context has not yet been refreshed -> provide services such as
+                // setting the parent context, setting the application context id, etc
+                if (cwac.getParent() == null) {
+                    // The context instance was injected without an explicit parent -> set
+                    // the root application context (if any; may be null) as the parent
+                    cwac.setParent(rootContext);
+                }
+                // 这个方法里面调用了AbstractApplication的refresh()方法
+                // 模板方法，规定IOC初始化基本流程
+                // 【】
+                configureAndRefreshWebApplicationContext(cwac);
+            }
+        }
+    }
+    // 先去ServletContext中查找Web容器的引用是否存在，并创建好默认的空IOC容器
+    if (wac == null) {
+        // No context instance was injected at construction time -> see if one
+        // has been registered in the servlet context. If one exists, it is assumed
+        // that the parent context (if any) has already been set and that the
+        // user has performed any initialization such as setting the context id
+        wac = findWebApplicationContext();
+    }
+    // 给上一步创建好的IOC容器赋值
+    if (wac == null) {
+        // No context instance is defined for this servlet -> create a local one
+        wac = createWebApplicationContext(rootContext);
+    }
+
+    // 触发onRefresh方法
+    if (!this.refreshEventReceived) {
+        // Either the context is not a ConfigurableApplicationContext with refresh
+        // support or the context injected at construction time had already been
+        // refreshed -> trigger initial onRefresh manually here.
+        // 【初始化 9 大组件】
+        onRefresh(wac);
+    }
+
+    if (this.publishContext) {
+        // Publish the context as a servlet context attribute.
+        String attrName = getServletContextAttributeName();
+        getServletContext().setAttribute(attrName, wac);
+        // ……
+    }
+
+    return wac;
+}
+
+/*
+ * 模板方法，规定IOC初始化基本流程
+ */
+protected void configureAndRefreshWebApplicationContext(ConfigurableWebApplicationContext wac) {
+    if (ObjectUtils.identityToString(wac).equals(wac.getId())) {
+        // The application context id is still set to its original default value
+        // -> assign a more useful id based on available information
+        if (this.contextId != null) {
+            wac.setId(this.contextId);
+        }
+        else {
+            // Generate default id...
+            wac.setId(ConfigurableWebApplicationContext.APPLICATION_CONTEXT_ID_PREFIX +
+                      ObjectUtils.getDisplayString(getServletContext().getContextPath()) + '/' + getServletName());
+        }
+    }
+
+    wac.setServletContext(getServletContext());
+    wac.setServletConfig(getServletConfig());
+    wac.setNamespace(getNamespace());
+    wac.addApplicationListener(new SourceFilteringListener(wac, new ContextRefreshListener()));
+
+    // The wac environment's #initPropertySources will be called in any case when the context
+    // is refreshed; do it eagerly here to ensure servlet property sources are in place for
+    // use in any post-processing or initialization that occurs below prior to #refresh
+    ConfigurableEnvironment env = wac.getEnvironment();
+    if (env instanceof ConfigurableWebEnvironment) {
+        ((ConfigurableWebEnvironment) env).initPropertySources(getServletContext(), getServletConfig());
+    }
+
+    postProcessWebApplicationContext(wac);
+    applyInitializers(wac);
+    // 调用refresh()
+    wac.refresh();
+}
+```
+
+> 分析到这儿，已经在调用refresh()了，前面也已经分析过refresh().
+>
+> 另外调用完refresh()初始化IOC容器后接着在initWebApplicationContext()内会调用onRefresh()初始化9大组件。
+
+```java
+// ========== DispatcherServlet ========== 
+@Override
+	protected void onRefresh(ApplicationContext context) {
+		initStrategies(context);
+	}
+
+/**
+ * 初始化策略
+ */
+protected void initStrategies(ApplicationContext context) {
+    // 多文件上传的组件
+    initMultipartResolver(context);
+    // 初始化本地语言环境
+    initLocaleResolver(context);
+    // 初始化模板处理器
+    initThemeResolver(context);
+    // handlerMapping
+    initHandlerMappings(context);
+    // 初始化参数适配器
+    initHandlerAdapters(context);
+    // 初始化异常拦截器
+    initHandlerExceptionResolvers(context);
+    // 初始化视图预处理器
+    initRequestToViewNameTranslator(context);
+    // 初始化视图转换器
+    initViewResolvers(context);
+    // FlashMap管理器
+    initFlashMapManager(context);
+}
+```
+
+> 执行完上面的初始化策略，初始化化阶段就完成了。
+
+
+
+##### 2、关联URL和Controller
+
+> HandlerMapping的子类AbstractDetectingUrlHandlerMapping实现了initApplicationContext()，直接看子类中初始化容器方法。
+>
+> 怎么从HandlerMappingInit那儿到这儿的？？？没解释清楚。
+
+```java
+// ========== AbstractDetectingUrlHandlerMapping ========== 
+@Override
+public void initApplicationContext() throws ApplicationContextException {
+    super.initApplicationContext();
+    // 【into】
+    detectHandlers();
+}
+
+/**
+ * 建立当前ApplicationContext中的所有controller和url的对应关系
+ */
+protected void detectHandlers() throws BeansException {
+    ApplicationContext applicationContext = obtainApplicationContext();
+    if (logger.isDebugEnabled()) {
+        logger.debug("Looking for URL mappings in application context: " + applicationContext);
+    }
+    // 获取ApplicationContext容器中所有bean的Name
+    String[] beanNames = (this.detectHandlersInAncestorContexts ?
+                          BeanFactoryUtils.beanNamesForTypeIncludingAncestors(applicationContext, Object.class) :
+                          applicationContext.getBeanNamesForType(Object.class));
+
+    // Take any bean name that we can determine URLs for.
+    // 遍历beanNames,并找到这些bean对应的url
+    for (String beanName : beanNames) {
+        // 找bean上的所有url(controller上的url+方法上的url),该方法由对应的子类实现
+        String[] urls = determineUrlsForHandler(beanName);
+        if (!ObjectUtils.isEmpty(urls)) {
+            // URL paths found: Let's consider it a handler.
+            // 保存urls和beanName的对应关系,put it to Map<urls,beanName>,该方法在父类AbstractUrlHandlerMapping中实现
+            registerHandler(urls, beanName);
+        }
+        else {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Rejected bean name '" + beanName + "': no URL paths identified");
+            }
+        }
+    }
+}
+
+/** 获取controller中所有方法的url,由子类实现,典型的模板模式 **/
+protected abstract String[] determineUrlsForHandler(String beanName);
+```
+
+> BeanNameUrlHandlerMapping是AbstractDetectingUrlHandlerMapping的子类，在处理controller和url映射时由子类实现，重写determineUrlsForHandler()
+>
+
+```java
+public class BeanNameUrlHandlerMapping extends AbstractDetectingUrlHandlerMapping {
+   /**
+    * Checks name and aliases of the given bean for URLs, starting with "/".
+    */
+   @Override
+   protected String[] determineUrlsForHandler(String beanName) {
+      List<String> urls = new ArrayList<>();
+      if (beanName.startsWith("/")) {
+         urls.add(beanName);
+      }
+      String[] aliases = obtainApplicationContext().getAliases(beanName);
+      for (String alias : aliases) {
+         if (alias.startsWith("/")) {
+            urls.add(alias);
+         }
+      }
+      return StringUtils.toStringArray(urls);
+   }
+}
+```
+
+> 到这儿HandlerMapping组件就已经建立所有URL和controller的对应关系。
+>
+> ？？？这就就没了，哪儿和初始化处的HandlerMapping建立关系的，没明白，
 
 
 
 
 
+##### 3、运行调用阶段
+
+> 这一步是由请求触发的，入口为DispatcherServlet#doService()
+>
+> 在FrameworkServlet中可以看到重写HTTPServlet中的doGet()、doPost()、doPut()等里面都调用了processRequest(request, response)。然后在processRequest()中调用了doService(request, response)抽象方法。在DispatcherServlet中实现了doService抽象方法。
+
+```java
+	@Override
+	protected final void doGet(HttpServletRequest request, HttpServletResponse response)
+			throws ServletException, IOException {
+
+        // 【into】
+		processRequest(request, response);
+	}
+
+    protected final void processRequest(HttpServletRequest request, HttpServletResponse response)
+        throws ServletException, IOException {
+
+        long startTime = System.currentTimeMillis();
+        Throwable failureCause = null;
+
+        LocaleContext previousLocaleContext = LocaleContextHolder.getLocaleContext();
+        LocaleContext localeContext = buildLocaleContext(request);
+
+        RequestAttributes previousAttributes = RequestContextHolder.getRequestAttributes();
+        ServletRequestAttributes requestAttributes = buildRequestAttributes(request, response, previousAttributes);
+
+        WebAsyncManager asyncManager = WebAsyncUtils.getAsyncManager(request);
+        asyncManager.registerCallableInterceptor(FrameworkServlet.class.getName(), new RequestBindingInterceptor());
+
+        initContextHolders(request, localeContext, requestAttributes);
+
+        try {
+            // 【into】
+            doService(request, response);
+        }
+        catch (ServletException | IOException ex) {
+            failureCause = ex;
+            throw ex;
+        }
+        catch (Throwable ex) {
+            failureCause = ex;
+            throw new NestedServletException("Request processing failed", ex);
+        }
+
+        finally {
+            resetContextHolders(request, previousLocaleContext, previousAttributes);
+            if (requestAttributes != null) {
+                requestAttributes.requestCompleted();
+            }
+
+            if (logger.isDebugEnabled()) {
+                if (failureCause != null) {
+                    this.logger.debug("Could not complete request", failureCause);
+                }
+                else {
+                    if (asyncManager.isConcurrentHandlingStarted()) {
+                        logger.debug("Leaving response open for concurrent processing");
+                    }
+                    else {
+                        this.logger.debug("Successfully completed request");
+                    }
+                }
+            }
+
+            publishRequestHandledEvent(request, response, startTime, failureCause);
+        }
+    }
+
+    protected abstract void doService(HttpServletRequest request, HttpServletResponse response)
+          throws Exception;
+```
 
 
 

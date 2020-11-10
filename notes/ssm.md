@@ -5432,13 +5432,13 @@ public class BeanNameUrlHandlerMapping extends AbstractDetectingUrlHandlerMappin
 
 > 这一步是由请求触发的，入口为DispatcherServlet#doService()
 >
-> 在FrameworkServlet中可以看到重写HTTPServlet中的doGet()、doPost()、doPut()等里面都调用了processRequest(request, response)。然后在processRequest()中调用了doService(request, response)抽象方法。在DispatcherServlet中实现了doService抽象方法。
+> 在FrameworkServlet中可以看到重写HttpServlet中的doGet()、doPost()、doPut()等里面都调用了processRequest(request, response)。然后在processRequest()中调用了doService(request, response)抽象方法。在DispatcherServlet中实现了doService抽象方法。
 
 ```java
-	@Override
+// ========== FrameworkServlet ========== 
+@Override
 	protected final void doGet(HttpServletRequest request, HttpServletResponse response)
 			throws ServletException, IOException {
-
         // 【into】
 		processRequest(request, response);
 	}
@@ -5464,42 +5464,421 @@ public class BeanNameUrlHandlerMapping extends AbstractDetectingUrlHandlerMappin
             // 【into】
             doService(request, response);
         }
-        catch (ServletException | IOException ex) {
-            failureCause = ex;
-            throw ex;
-        }
-        catch (Throwable ex) {
-            failureCause = ex;
-            throw new NestedServletException("Request processing failed", ex);
-        }
-
-        finally {
-            resetContextHolders(request, previousLocaleContext, previousAttributes);
-            if (requestAttributes != null) {
-                requestAttributes.requestCompleted();
-            }
-
-            if (logger.isDebugEnabled()) {
-                if (failureCause != null) {
-                    this.logger.debug("Could not complete request", failureCause);
-                }
-                else {
-                    if (asyncManager.isConcurrentHandlingStarted()) {
-                        logger.debug("Leaving response open for concurrent processing");
-                    }
-                    else {
-                        this.logger.debug("Successfully completed request");
-                    }
-                }
-            }
-
-            publishRequestHandledEvent(request, response, startTime, failureCause);
-        }
+        // ……
     }
 
     protected abstract void doService(HttpServletRequest request, HttpServletResponse response)
           throws Exception;
 ```
+
+> 接下来可以在DispatherServlet中看到实现doService()
+>
+
+```java
+// ========== DispatcherServlet ========== 
+/**
+ * Exposes the DispatcherServlet-specific request attributes and delegates to {@link #doDispatch}
+ * for the actual dispatching.
+ */
+@Override
+protected void doService(HttpServletRequest request, HttpServletResponse response) throws Exception {
+   // logger……
+
+   // Keep a snapshot of the request attributes in case of an include,
+   // to be able to restore the original attributes after the include.
+   Map<String, Object> attributesSnapshot = null;
+   if (WebUtils.isIncludeRequest(request)) {
+      attributesSnapshot = new HashMap<>();
+      Enumeration<?> attrNames = request.getAttributeNames();
+      while (attrNames.hasMoreElements()) {
+         String attrName = (String) attrNames.nextElement();
+         if (this.cleanupAfterInclude || attrName.startsWith(DEFAULT_STRATEGIES_PREFIX)) {
+            attributesSnapshot.put(attrName, request.getAttribute(attrName));
+         }
+      }
+   }
+
+   // Make framework objects available to handlers and view objects.
+   request.setAttribute(WEB_APPLICATION_CONTEXT_ATTRIBUTE, getWebApplicationContext());
+   request.setAttribute(LOCALE_RESOLVER_ATTRIBUTE, this.localeResolver);
+   request.setAttribute(THEME_RESOLVER_ATTRIBUTE, this.themeResolver);
+   request.setAttribute(THEME_SOURCE_ATTRIBUTE, getThemeSource());
+
+   if (this.flashMapManager != null) {
+      FlashMap inputFlashMap = this.flashMapManager.retrieveAndUpdate(request, response);
+      if (inputFlashMap != null) {
+         request.setAttribute(INPUT_FLASH_MAP_ATTRIBUTE, Collections.unmodifiableMap(inputFlashMap));
+      }
+      request.setAttribute(OUTPUT_FLASH_MAP_ATTRIBUTE, new FlashMap());
+      request.setAttribute(FLASH_MAP_MANAGER_ATTRIBUTE, this.flashMapManager);
+   }
+
+   try {
+       // 【into】
+      doDispatch(request, response);
+   }
+   // ……
+}
+```
+
+> 获取处理器
+
+```java
+// ========== DispatcherServlet ========== 
+@Nullable
+protected HandlerExecutionChain getHandler(HttpServletRequest request) throws Exception {
+   if (this.handlerMappings != null) {
+      for (HandlerMapping hm : this.handlerMappings) {
+         if (logger.isTraceEnabled()) {
+            logger.trace(
+                  "Testing handler map [" + hm + "] in DispatcherServlet with name '" + getServletName() + "'");
+         }
+         HandlerExecutionChain handler = hm.getHandler(request);
+         if (handler != null) {
+            return handler;
+         }
+      }
+   }
+   return null;
+}
+
+// ========== AbstractHandlerMapping ========== 
+public final HandlerExecutionChain getHandler(HttpServletRequest request) throws Exception {
+    Object handler = getHandlerInternal(request);
+    if (handler == null) {
+        handler = getDefaultHandler();
+    }
+    if (handler == null) {
+        return null;
+    }
+    // Bean name or resolved handler?
+    if (handler instanceof String) {
+        String handlerName = (String) handler;
+        handler = obtainApplicationContext().getBean(handlerName);
+    }
+
+    HandlerExecutionChain executionChain = getHandlerExecutionChain(handler, request);
+    if (CorsUtils.isCorsRequest(request)) {
+        CorsConfiguration globalConfig = this.globalCorsConfigSource.getCorsConfiguration(request);
+        CorsConfiguration handlerConfig = getCorsConfiguration(handler, request);
+        CorsConfiguration config = (globalConfig != null ? globalConfig.combine(handlerConfig) : handlerConfig);
+        executionChain = getCorsHandlerExecutionChain(request, executionChain, config);
+    }
+    return executionChain;
+}
+```
+
+> 中央控制器
+
+```java
+// ========== DispatcherServlet ========== 
+/** 中央控制器,控制请求的转发 **/
+protected void doDispatch(HttpServletRequest request, HttpServletResponse response) throws Exception {
+   HttpServletRequest processedRequest = request;
+   HandlerExecutionChain mappedHandler = null;
+   boolean multipartRequestParsed = false;
+
+   WebAsyncManager asyncManager = WebAsyncUtils.getAsyncManager(request);
+
+   try {
+      ModelAndView mv = null;
+      Exception dispatchException = null;
+
+      try {
+         // 1.检查是否是文件上传的请求
+         processedRequest = checkMultipart(request);
+         multipartRequestParsed = (processedRequest != request);
+
+         // Determine handler for the current request.
+         // 2.取得处理当前请求的controller,这里也称为handler处理器
+         //      第一个步骤的意义就在这里体现了.这里并不是直接返回controller,
+         //  而是返回的HandlerExecutionChain请求处理器链对象,
+         //  该对象封装了handler和interceptors.
+         // 【into】
+         mappedHandler = getHandler(processedRequest);
+         // 如果handler为空,则返回404
+         if (mappedHandler == null) {
+            noHandlerFound(processedRequest, response);
+            return;
+         }
+
+         // Determine handler adapter for the current request.
+         // 3. 获取处理request的处理器适配器handler adapter
+         HandlerAdapter ha = getHandlerAdapter(mappedHandler.getHandler());
+
+         // Process last-modified header, if supported by the handler.
+         // 处理 last-modified 请求头
+         String method = request.getMethod();
+         boolean isGet = "GET".equals(method);
+         if (isGet || "HEAD".equals(method)) {
+            long lastModified = ha.getLastModified(request, mappedHandler.getHandler());
+            if (logger.isDebugEnabled()) {
+               logger.debug("Last-Modified value for [" + getRequestUri(request) + "] is: " + lastModified);
+            }
+            if (new ServletWebRequest(request, response).checkNotModified(lastModified) && isGet) {
+               return;
+            }
+         }
+
+         if (!mappedHandler.applyPreHandle(processedRequest, response)) {
+            return;
+         }
+
+         // Actually invoke the handler.
+         // 4.实际的处理器处理请求,返回结果视图对象
+         mv = ha.handle(processedRequest, response, mappedHandler.getHandler());
+
+         if (asyncManager.isConcurrentHandlingStarted()) {
+            return;
+         }
+
+         // 结果视图对象的处理
+         applyDefaultViewName(processedRequest, mv);
+         mappedHandler.applyPostHandle(processedRequest, response, mv);
+      }
+      catch (Exception ex) {
+       // ……
+   }
+   finally {
+      if (asyncManager.isConcurrentHandlingStarted()) {
+         // Instead of postHandle and afterCompletion
+         if (mappedHandler != null) {
+            // 请求成功响应之后的方法
+            mappedHandler.applyAfterConcurrentHandlingStarted(processedRequest, response);
+         }
+      }
+      else {
+         // Clean up any resources used by a multipart request.
+         if (multipartRequestParsed) {
+            cleanupMultipart(processedRequest);
+         }
+      }
+   }
+}
+```
+
+
+
+> getHandler()就是从HandlerMapping中找到URL和Controller的对应关系，从Map< urls, beanName>中取得Controller后，经过拦截器的预处理方法再通过反射获取该方法上的注解和参数，解析方法和参数上的注解，然后反射调用方法获取ModelAndView结果视图。
+>
+> 最后调用RequestMappingHandlerAdapter#handle()中的核心逻辑，handleInternal()
+
+> 实际的处理器处理请求,返回结果视图对象
+
+```java
+// ========== AbstractHandlerMethodAdapter ==========
+public final ModelAndView handle(HttpServletRequest request, HttpServletResponse response, Object handler)
+      throws Exception {
+
+   return handleInternal(request, response, (HandlerMethod) handler);
+}
+@Nullable
+protected abstract ModelAndView handleInternal(HttpServletRequest request,
+                                               HttpServletResponse response, HandlerMethod handlerMethod) throws Exception;
+
+// ========== RequestMappingHandlerAdapter ==========
+@Override
+protected ModelAndView handleInternal(HttpServletRequest request,
+                                      HttpServletResponse response, HandlerMethod handlerMethod) throws Exception {
+
+    ModelAndView mav;
+    checkRequest(request);
+
+    // Execute invokeHandlerMethod in synchronized block if required.
+    if (this.synchronizeOnSession) {
+        HttpSession session = request.getSession(false);
+        if (session != null) {
+            Object mutex = WebUtils.getSessionMutex(session);
+            synchronized (mutex) {
+                // 【into】
+                mav = invokeHandlerMethod(request, response, handlerMethod);
+            }
+        }
+        else {
+            // No HttpSession available -> no mutex necessary
+            mav = invokeHandlerMethod(request, response, handlerMethod);
+        }
+    }
+    else {
+        // No synchronization on session demanded at all...
+        mav = invokeHandlerMethod(request, response, handlerMethod);
+    }
+
+    if (!response.containsHeader(HEADER_CACHE_CONTROL)) {
+        if (getSessionAttributesHandler(handlerMethod).hasSessionAttributes()) {
+            applyCacheSeconds(response, this.cacheSecondsForSessionAttributeHandlers);
+        }
+        else {
+            prepareResponse(response);
+        }
+    }
+
+    return mav;
+}
+
+
+protected ModelAndView invokeHandlerMethod(HttpServletRequest request,
+                                           HttpServletResponse response, HandlerMethod handlerMethod) throws Exception {
+
+    ServletWebRequest webRequest = new ServletWebRequest(request, response);
+    try {
+        WebDataBinderFactory binderFactory = getDataBinderFactory(handlerMethod);
+        ModelFactory modelFactory = getModelFactory(handlerMethod, binderFactory);
+
+        ServletInvocableHandlerMethod invocableMethod = createInvocableHandlerMethod(handlerMethod);
+        if (this.argumentResolvers != null) {
+            invocableMethod.setHandlerMethodArgumentResolvers(this.argumentResolvers);
+        }
+        if (this.returnValueHandlers != null) {
+            invocableMethod.setHandlerMethodReturnValueHandlers(this.returnValueHandlers);
+        }
+        invocableMethod.setDataBinderFactory(binderFactory);
+        invocableMethod.setParameterNameDiscoverer(this.parameterNameDiscoverer);
+
+        ModelAndViewContainer mavContainer = new ModelAndViewContainer();
+        mavContainer.addAllAttributes(RequestContextUtils.getInputFlashMap(request));
+        modelFactory.initModel(webRequest, mavContainer, invocableMethod);
+        mavContainer.setIgnoreDefaultModelOnRedirect(this.ignoreDefaultModelOnRedirect);
+
+        AsyncWebRequest asyncWebRequest = WebAsyncUtils.createAsyncWebRequest(request, response);
+        asyncWebRequest.setTimeout(this.asyncRequestTimeout);
+
+        WebAsyncManager asyncManager = WebAsyncUtils.getAsyncManager(request);
+        asyncManager.setTaskExecutor(this.taskExecutor);
+        asyncManager.setAsyncWebRequest(asyncWebRequest);
+        asyncManager.registerCallableInterceptors(this.callableInterceptors);
+        asyncManager.registerDeferredResultInterceptors(this.deferredResultInterceptors);
+
+        if (asyncManager.hasConcurrentResult()) {
+            Object result = asyncManager.getConcurrentResult();
+            mavContainer = (ModelAndViewContainer) asyncManager.getConcurrentResultContext()[0];
+            asyncManager.clearConcurrentResult();
+            if (logger.isDebugEnabled()) {
+                logger.debug("Found concurrent result value [" + result + "]");
+            }
+            invocableMethod = invocableMethod.wrapConcurrentResult(result);
+        }
+
+        // 完成request中参数和方法参数上数据的绑定
+        invocableMethod.invokeAndHandle(webRequest, mavContainer);
+        if (asyncManager.isConcurrentHandlingStarted()) {
+            return null;
+        }
+
+        return getModelAndView(mavContainer, modelFactory, webRequest);
+    }
+    finally {
+        webRequest.requestCompleted();
+    }
+}
+```
+
+> invocableMethod.invokeAndHandle()完成的是request中参数和方法参数上数据的绑定，SpringMVC中提供两种参数到方法的绑定方式
+>
+> 1. 通过注解进行绑定，@RequestParam
+> 2. 通过参数名称：前提是必须要获取方法中参数的名称，但Java反射只提供了获取方法参数类型的api，SpringMVC使用的**asm框架读取字节码文件来获取方法的参数名称**，然后完成参数绑定。
+>
+> 上面两种方式，最好使用注解来完成参数绑定，这样可以省去asm框架读取字节码的操作，提高效率。
+
+
+
+
+
+
+
+#### SpringMVC使用优化建议
+
+##### 1、Controller尽量单例
+
+> 可以减少创建对象和回收对象的开销，另外Controller的类变量和实例变量可以以方法形参声明的尽量以方法形参声明，不用以类变量和实例变量声明，这样可以避免线程安全问题。
+
+##### 2、处理Request的方法中加上@RequestParam注解
+
+> 可以避免使用asm框架读取class文件获取方法参数名的过程。即便读取的方法做了缓存，但尽量不读取class文件更好。
+
+
+
+
+
+# Spring 数据访问
+
+## Spring事务传播原理
+
+#### 1、基本概念
+
+> 事务(Transaction)是访问并可能更新数据库中各种数据项的一个程序执行单元(unit)。是恢复和并发控制的基本单位。
+> **特点：**事务具有原子性、一致性、隔离性、持久性。
+> 原子性( Automicity)：一个事务是一个不可分割的工作单位,事务中包括的诸操作要么都做,要么都不做。
+> 一致性( Consistency )：事务必须是使数据库从一个一致性状态变到另一个一致性状态。一致性与原子性是密切相关的。
+> 隔离性( Isolation)：一个事务的执行不能被其他事务干扰。即事务内部的操作及
+> 使用的数据对并发的其他事务是隔离的，并发执行的各个事务之间不能互相干扰。
+> 持久性( Durability )：持久性也称永久性( Permanence)，指一个事务一旦提交，它对数据库中数据的改变就应该是永久性的。接下来的其他操作或故障不应该对其有任何影响。
+
+#### 2、基本原理
+
+> spring事务的本质是数据库对事务的支持。对于纯jdbc操作数据库要用到事务就必须1.获取连接；2.开启事务；3.执行CUD；4.提交或回滚事务；5.关闭连接。使用spring的事务管理功能后就不用写2和4的代码。
+>
+> spring层面：通过**aop代理生成代理类**。Spring在启动时会去解析生成相关的bean，这时候会查看拥有事务的注解或配置，并为这些类和方法**生成代理**，在代理中把事务相关的（开启正常提交事务，异常回滚事务）处理好。
+>
+> 数据库层面的事务：提交和回滚事务通过**binlog和redo log**实现。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Spring案例分享
+
+
 
 
 

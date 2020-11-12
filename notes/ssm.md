@@ -5806,6 +5806,8 @@ protected ModelAndView invokeHandlerMethod(HttpServletRequest request,
 
 #### 1、基本概念
 
+##### 1-1、特点
+
 > 事务(Transaction)是访问并可能更新数据库中各种数据项的一个程序执行单元(unit)。是恢复和并发控制的基本单位。
 > **特点：**事务具有原子性、一致性、隔离性、持久性。
 > 原子性( Automicity)：一个事务是一个不可分割的工作单位,事务中包括的诸操作要么都做,要么都不做。
@@ -5813,6 +5815,18 @@ protected ModelAndView invokeHandlerMethod(HttpServletRequest request,
 > 隔离性( Isolation)：一个事务的执行不能被其他事务干扰。即事务内部的操作及
 > 使用的数据对并发的其他事务是隔离的，并发执行的各个事务之间不能互相干扰。
 > 持久性( Durability )：持久性也称永久性( Permanence)，指一个事务一旦提交，它对数据库中数据的改变就应该是永久性的。接下来的其他操作或故障不应该对其有任何影响。
+
+##### 1-2、传播属性
+
+> 传播属性：多个事务同时存在时，应该如何处理这些事务的行为。
+>
+> 
+
+##### 1-3、隔离级别
+
+> xx
+>
+> 
 
 #### 2、基本原理
 
@@ -5822,6 +5836,63 @@ protected ModelAndView invokeHandlerMethod(HttpServletRequest request,
 >
 > 数据库层面的事务：提交和回滚事务通过**binlog和redo log**实现。
 
+#### 3、Spring事务API架构图
+
+
+
+ **Spring事务接管数据库事务**
+
+> DataSource是对Connection的封装，Connection底层是通过Socket封装。
+>
+> spring的事务控制器通过Connection控制。不管是接管什么数据库的事务，拿到该数据库的Connection就接管了。
+>
+> DataSourceTransactionManager类控制，拿到DataSource（是对Connection的封装）进行操作。使用代理模式实现。
+
+```java
+// 生成的代理类的伪代码，大概如下
+before(){
+   conn.setAutoCommit(false);
+}
+try{
+    execute();// 原始的逻辑，拿到DataSource进行操作
+}catch(Exception e){// 发生异常后回滚方式
+    after(){
+    if(condition){
+        conn.rollback();
+    }else{
+        conn.commit();
+    }
+}finally{
+    conn.close();
+}
+```
+
+**通过Socket与数据库通信**
+
+> 回滚和提交在db层面操作的。MySQLIO类中封装socket与数据库服务器完成交互。各种服务间的通信都是基于网络通信的，端口通信都是基于server Socket。
+>
+> 找到Connection接口，再看其实现类，在com.mysql.jdbc.ConnectionImpl#createNewIO中顺着找下去能找到new MysqlIO，在MysqlIO类中可看到使用Socket完成的与数据库服务器通信。
+>
+> SQL语句相当于通信协议中的报文格式。
+
+**数据库事务**
+
+> MySQL服务器主要分为“内存区域”、“磁盘存储区域”（持久化的），事务操作是对内存区域中的数据操作。
+>
+> 1. 执行select语句，将满足条件的数据找出来放在内存，有临时表记录
+> 2. 对数据进行CUD操作，并检查是否有错误
+> 3. 没有错误就协会持久化空间；有错误就返回异常错误码，并终止持久化操作
+> 4. 将结果返回给客户端
+>
+> 操作过程的所有记录在log中
+
+**分布式事务**
+
+> 不是在同一台机器，只能用多个线程去操作，弱一致性（异步操作）达到最终一致性。
+>
+> 使用数据同步机制，日志，缓存（共用一块区域）去保证。
+>
+> 数据回滚也是通过日志实现。
 
 
 
@@ -5833,30 +5904,60 @@ protected ModelAndView invokeHandlerMethod(HttpServletRequest request,
 
 
 
+#### Spring5新特性及高频面试题分析
+
+> 1. 反应式编程：异步和非阻塞的，只需要少量的线程，新的事件循环执行模型就可以垂直扩展。在web. xml中的servlet注解中需要加上异步执行的配置< async-supported>true< / async-supported>
 
 
 
+BeanFactory和ApplicationContext的的区别
+
+> 1. ApplicationContext是BeanFactory的实现类
+> 2. BeanFactory是顶层设计（抽象），而ApplicationContext是User Interface（面向用户的接口）
+> 3. ApplicationContext功能非常丰富，API是最全的，一般会认为ApplicationContext就是IOC（IOC的功能的实现是在DefaultListableBeanFactory类中完成）
+> 4. BeanFactory可以理解为bean集合的工厂类。BeanFactory包含了各种bean的定义，以便在接收到客户端请求时将对应的bean实例化。还能在实例化对象时生成协作类之间的关系，此举将bean自身与bean客户端的配置中解放出来。BeanFactory还包含了bean生命周期的控制，调用客户端的初始化方法和销毁方法。
+> 5. ApplicationContext如同bean factory一样具有bean定义、bean关联关系的设置，根据请求分发bean的功能。但ApplicationContext在此基础上还提供了其他功能。如：国际化的文本消息；统一的资源文件读取方式；已在监听器中注册的bean的事件。
 
 
 
+Spring提供几种配置方式来设置元数据？
+
+> 有三种。
+>
+> 基于xml的配置；基于注解的配置；基于java的配置。
 
 
 
+Spring bean 的生命周期
+
+> 生命周期：从创建，到调用，到销毁
+>
+> singleton：从spring容器的启动到spring容器的销毁，如果是延时加载，在调用前创建对象。
+>
+> prototype：在调用前创建，调用后销毁，作用域决定了生命周期的长短。
 
 
 
+spring bean各个作用域之间的区别
+
+> 1. singleton：作用域全局，在任何地方都可以通过IOC容器拿到它
+> 2. prototype：全局的
+> 3. request：在请求发起和结束之间
+> 4. session：一个session创建和失效之间，默认是30min
 
 
 
+spring中bean是线程安全的吗
+
+> spring中的bean是否线程安全和spring无关，与程序员自己写的代码有关。可以让它线程安全，也可以让它线程不安全。由自己控制。
 
 
 
+ 在一个方法内不要用循环去查询数据库
 
-
-
-
-
-
+> 因为会多次连接数据库，循环次数未知导致连接池的数量不可控。
+>
+> 解决方案：分页、缓存、联合查询
 
 
 

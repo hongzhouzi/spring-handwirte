@@ -5169,10 +5169,11 @@ public static Object invokeJoinpointUsingReflection(@Nullable Object target, Met
 public final void init() throws ServletException {
 	// ……
    // Set bean properties from init parameters.
+   // 读取Servlet初始化参数(<servlet>标签中的init-param)
    PropertyValues pvs = new ServletConfigPropertyValues(getServletConfig(), this.requiredProperties);
    if (!pvs.isEmpty()) {
       try {
-         // 定位资源
+         // 定位资源，通过BeanWrapper简化设值过程，方便后续使用
          BeanWrapper bw = PropertyAccessorFactory.forBeanPropertyAccess(this);
          // 加载配置信息
          ResourceLoader resourceLoader = new ServletContextResourceLoader(getServletContext());
@@ -5187,7 +5188,7 @@ public final void init() throws ServletException {
    }
 
    // Let subclasses do whatever initialization they like.
-   // 【通过它最终会调用refresh()】
+   // 【into】提供给子类的扩展点，由FrameworkServlet覆盖，通过它最终会调用refresh()
    initServletBean();
 
    // ……
@@ -5199,7 +5200,7 @@ protected final void initServletBean() throws ServletException {
     // ……logger
     long startTime = System.currentTimeMillis();
     try {
-        // 【】
+        // 【into】初始化web上下文
         this.webApplicationContext = initWebApplicationContext();
         initFrameworkServlet();
     }
@@ -5229,8 +5230,7 @@ protected WebApplicationContext initWebApplicationContext() {
                     cwac.setParent(rootContext);
                 }
                 // 这个方法里面调用了AbstractApplication的refresh()方法
-                // 模板方法，规定IOC初始化基本流程
-                // 【】
+                // 【into】模板方法，规定IOC初始化基本流程
                 configureAndRefreshWebApplicationContext(cwac);
             }
         }
@@ -5254,7 +5254,7 @@ protected WebApplicationContext initWebApplicationContext() {
         // Either the context is not a ConfigurableApplicationContext with refresh
         // support or the context injected at construction time had already been
         // refreshed -> trigger initial onRefresh manually here.
-        // 【初始化 9 大组件】
+        // 【into】初始化 9 大组件
         onRefresh(wac);
     }
 

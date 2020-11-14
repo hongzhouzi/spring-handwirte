@@ -30,12 +30,7 @@
         <param-name>contextConfigLocation</param-name>
         <param-value>classpath:config/spring-mvc.xml</param-value>
     </init-param>
-    <init-param>
-        <param-name>spring.profiles.active</param-name>
-        <param-value>dev</param-value>
-    </init-param>
     <load-on-startup>1</load-on-startup>
-    <async-supported>true</async-supported>
 </servlet>
 <servlet-mapping>
     <servlet-name>SpringMVC</servlet-name>
@@ -207,7 +202,7 @@ org.springframework.web.context.WebApplicationContext=org.springframework.web.co
 
 > 该步骤将<context-param>中设定的取名为 contextConfigLocation的配置文件路径设置到spring中，并刷新web应用上下文进入AbstractApplicationContext#refresh()的调用。
 >
-> 因为默认处理类是 XmlWebApplicationContext ，而它继承于AbstractApplicationContext。
+> 因为默认处理类是 XmlWebApplicationContext ，而它继承于AbstractApplicationContext，所以调用refresh()是调用AbstractApplicationContext中的refresh()。
 
 ```java
 public static final String CONFIG_LOCATION_PARAM = "contextConfigLocation";
@@ -250,23 +245,42 @@ protected void configureAndRefreshWebApplicationContext(ConfigurableWebApplicati
 }
 ```
 
-> 进入到refresh()的调用，就是大家熟悉的spring启动统一入口。
+> 进入到refresh()的调用，就是大家熟悉的spring启动统一入口。然后就进入spring的IOC和DI步骤等，后面再单独写文章分析。
 >
-> 在完成该容器初始化后，就会初始化SpringMVC子容器。
 
 
 
 ##### 5、初始化SpringMVC上下文
 
-> 在初始化servlet时通过配置的DispatcherServlet将SpringMVC初始化。DispatcherServlet上下文在初始化的时候会建立自己的IOC上下文，用以持有SpringMVC相关的bean（处理器映射、视图解析器等）。在建立DispatcherServlet自己的IoC上下文时，会先从ServletContext中获取之前的根上下文作为自己的的parent上下文。有了这个parent上下文之后，再初始化自己持有的上下文。
+> 看到这段配置：
 >
-> 每个servlet持有自己的上下文，即拥有自己独立的bean空间，同时各个servlet共享根容器的上下文。
+> ```xml
+> <!-- SpringMVC的Servlet配置 -->
+> <servlet>
+>     <servlet-name>SpringMVC</servlet-name>
+>     <servlet-class>org.springframework.web.servlet.DispatcherServlet</servlet-class>
+>     <init-param>
+>         <param-name>contextConfigLocation</param-name>
+>         <param-value>classpath:config/spring-mvc.xml</param-value>
+>     </init-param>
+>     <!-- 标记容器是否在启动的时候就加载这个servlet -->
+>     <load-on-startup>1</load-on-startup>
+> </servlet>
+> <servlet-mapping>
+>     <servlet-name>SpringMVC</servlet-name>
+>     <url-pattern>/</url-pattern>
+> </servlet-mapping>
+> ```
+>
+> 上面配置中 <load-on-startup>1</load-on-startup>表示在Servlet容器启动时就加载该servlet。（<load-on-startup>用来标识容器是否启动时就加载该servlet，值必须是大于等于0的整数；值越小就越优先加载、值相同则容器决定加载顺序、没有指定或值小于0则用到该servlet时才加载）
 
-> DispatcherServlet初始化顺序：
->
-> 1. 它配置在<servlet>标签中，那么肯定继承了HttpServlet并重写了其init()，在init()中完成初始化操作。于是沿着DispatcherServlet的父类找上去发现HttpServletBean继承HttpServlet，并在里面重写了init()。在这init()中主要完成了3件事：1、将Servlet初始化参数（init-param）设置到该组件上（如contextAttribute、contextClass、namespace、contextConfigLocation）；2、通过BeanWrapper简化设值过程，方便后续使用；3、提供给子类初始化扩展点，initServletBean()，该方法由FrameworkServlet覆盖。
-> 2. FrameworkServlet继承HttpServletBean，通过initServletBean()进行Web上下文初始化，该方法主要完成两件事：1、初始化web上下文；2、提供给子类初始化扩展点。
-> 3. DispatcherServlet继承FrameworkServlet，并实现了onRefresh()方法提供一些前端控制器相关的配置。
+**DispatcherServlet初始化顺序：**
+
+> 1. 它是基于servlet的，那么肯定继承了HttpServlet并重写了init()，在init()中完成初始化操作。于是沿着DispatcherServlet的父类找上去发现**HttpServletBean**继承HttpServlet，并在里面重写了**init()**。在这init()中主要完成了3件事：1、将Servlet初始化参数（init-param）设置到该组件上（如contextConfigLocation）；2、通过BeanWrapper简化设值过程，方便后续使用；3、提供给子类初始化扩展点，initServletBean()，该方法由FrameworkServlet覆盖。
+>2. **FrameworkServlet**继承HttpServletBean，通过**initServletBean()**进行Web上下文初始化，该方法主要完成两件事：1、初始化web上下文；2、提供给子类初始化扩展点。
+> 3. DispatcherServlet继承FrameworkServlet，并实现了**onRefresh()**方法提供一些前端控制器相关的配置，该方法主要完成1件事：初始化SpringMVC中 9 大组件。
+
+
 
 ###### 1）HttpServletBean#init()
 
@@ -432,9 +446,9 @@ protected void configureAndRefreshWebApplicationContext(ConfigurableWebApplicati
 ```java
 // ========== DispatcherServlet ========== 
 @Override
-	protected void onRefresh(ApplicationContext context) {
-		initStrategies(context);
-	}
+protected void onRefresh(ApplicationContext context) {
+    initStrategies(context);
+}
 
 /**
  * 初始化策略
@@ -465,12 +479,73 @@ protected void initStrategies(ApplicationContext context) {
 
 
 
+##### 总结
 
+> 1. 对于web应用，它需要部署在web容器中，web容器提供了一个全局的上下文环境（即ServletContext），为Spring IOC容器提供了宿主环境。
+>
+> 2. web.xml中配置了ContextLoaderListener，在web容器启动时会触发初始化事件，ContextLoaderListener监听到这个事件后里面的contextInitialized()会被调用，然后就在这个方法中初始化一个Spring上下文，这个又被称为根上下文，即WebApplicationContext，默认实现类是XmlWebApplicationContext。这个容器初始化完毕后将其存储到ServletContext中，便于子容器获取。
+> 3. 通过配置的DispatcherServlet开始初始化SpringMVC，用来分发处理每个Servlet请求。SpringMVC上下文初始化时会建立自己的IOC上下文，用来持有自身需要的相关bean。在建立上下文时会先从ServletContext中获取根上下文，用来作为自己上下文的parent，有了parent之后再初始化自己的上下文（映射处理器bean、视图解析器bean等）。初始化完毕后spring以与servlet的名字相关（此处不是简单的以servlet名为 Key，而是通过一些转换，具体可自行查看源码）的属性为Key，也将其存到ServletContext中，以便后续使用。这样每个servlet持有自己的上下文，即拥有自己独立的bean空间，同时各个servlet共享根容器的上下文。
+>
+> **注意：**用户可以配置多个DispatcherServlet来分别处理不同的url请求，每个DispatcherServlet上下文都对应一个自己的子Spring容器，他们都拥有相同的父Spring容器（业务层，持久（dao）bean所在的容器）。
 
-
+![image-20201114214944125](spring启动分析.assets/image-20201114214944125.png)
 
 ##### 参考
 
 1. 【Web.xml详解】https://blog.csdn.net/believejava/article/details/43229361
 
 2. 【Spring启动过程分析】https://blog.csdn.net/moshenglv/article/details/53517343
+
+
+
+
+
+### 非web环境
+
+> 在其他非web环境下可以使用多种方式配置，spring容器主要是对资源的管理，只要能让容器定位到资源位置，并读取到容器中就可以对资源进行管理了。spring提供了多种加载资源的api，比如从classpath路径下加载、从文件系统中加载、从输入流中加载；使用注解配置等。
+
+##### 1、注解配置
+
+> 使用 @Configuration 注解
+
+
+
+
+
+
+
+
+
+
+
+在解析xml中命名空间时，通过获取spring.handlers，将每个命名空间和它们对应的解析类绑定在一起。
+
+
+
+
+
+# 1. 调用链
+
+1. 调用`ContextLoadListenner.initWebApplicationContext（）`；
+2. 调用`ContextLoadListenner.createWebApplicationContext（）`：根据web.xml里面的contextClass配置的参数名确定Context类，如果没有就使用默认的`WebApplicationContext`，并创建这个类的实例wac,调用`wac.refresh（）`；
+3. 调用`ContextLoadListenner.configureAndRefreshWebApplicationContext()`: 根据web.xml配置的contextConfigLocation参数 确定配置文件位置
+4. 调用`wac.refresh（）`：
+5. 调用`wac.obtainFreshBeanFactory()`;
+6. 调用`wac.refreshBeanFactory()`
+7. 调用`wac.loadBeanDefinitions(beanFactory)`:创建XmlBeanDefinitionReader reader
+8. 调用`reader.loadBeanDefinitions(configLocation)`:确定文件存在并创建IO流
+
+```java
+// XmlBeanDefinitionReader#loadBeanDefinitions
+public int loadBeanDefinitions(EncodedResource encodedResource) ｛
+   InputStream inputStream = encodedResource.getResource().getInputStream();
+   try {
+      InputSource inputSource = new InputSource(inputStream);
+      if (encodedResource.getEncoding() != null) {
+        inputSource.setEncoding(encodedResource.getEncoding());
+      }
+      return doLoadBeanDefinitions(inputSource, encodedResource.getResource());
+   }
+｝
+```
+

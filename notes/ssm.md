@@ -475,11 +475,10 @@ public ClassPathXmlApplicationContext(
     throws BeansException {
 	// 调用父类构造方法为容器设置好spring资源加载器
     super(parent);
-    // 【后面分析该方法】
+    // 【into】将配置路径设置到容器上下文
     setConfigLocations(configLocations);
     if (refresh) {
-        // 重启、刷新、重置
-        // 【后面分析该方法】
+        // 【into】重启、刷新、重置
         refresh();
     }
 }

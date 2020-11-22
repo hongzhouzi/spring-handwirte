@@ -623,8 +623,7 @@ protected final void refreshBeanFactory() throws BeansException {
       // 对IOC容器进行定制化，如设置启动参数，开启注解的自动装配等
       customizeBeanFactory(beanFactory);
       // 调用载入Bean定义的方法，又使用了【委派模式】，
-      // 在当前类中只定义了抽象的loadBeanDefinitions方法，具体的实现调用子类容器
-       // 【后面分析该方法】
+      // 【into】在当前类中只定义了抽象的loadBeanDefinitions方法，具体的实现调用子类容器
       loadBeanDefinitions(beanFactory);
       synchronized (this.beanFactoryMonitor) {
          this.beanFactory = beanFactory;
@@ -649,7 +648,7 @@ protected final void refreshBeanFactory() throws BeansException {
  */
 protected void loadBeanDefinitions(DefaultListableBeanFactory beanFactory) throws BeansException, IOException {
    // Create a new XmlBeanDefinitionReader for the given BeanFactory.
-   // 创建XmlBeanDefinitionReader，即创建Bean读取器，并通过回调设置到容器中去，容  器使用该读取器读取Bean定义资源
+   // 创建XmlBeanDefinitionReader，即创建Bean读取器，并通过回调设置到容器中去，容器使用该读取器读取Bean定义资源
    XmlBeanDefinitionReader beanDefinitionReader = new XmlBeanDefinitionReader(beanFactory);
 
    // Configure the bean definition reader with this context's
@@ -5994,4 +5993,548 @@ spring中bean是线程安全的吗
 
 > 1. 使用连接池对连接进行管理
 > 2. SQL和代码分离
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Mybatis体系结构与工作原理
+
+
+
+**架构分层与主要模块划分**
+
+![image-20201118230216182](ssm.assets/image-20201118230216182.png)
+
+> 1. **配置解析**：Configuration、MapperStatement、ParameterMapping、ResultMapping。
+>
+> 2. **参数处理**：属性映射、参数映射、动态SQL。
+>
+> 3. **SQL执行**：SimpleExecutor、BatchExecutor、ReuseExecutor。
+>
+> 4. **结果映射**：简单映射、关系映射、延迟映射。
+
+
+
+##### 接口层
+
+> 接口层核心对象是SqlSession，它里面定义了非常多对数据库的操作方法，它是上层应用和Mybatis打交道的桥梁，接口层在收到调用请求时会调用核心处理层相应的模块来完成具体的操作。
+
+
+
+##### 核心处理层
+
+> 主要内容：
+>
+> 1. 把接口中传入的参数解析并映射成jdbc类型
+> 2. 解析xml文件中的SQL语句，包括插入参数、动态SQL的生成
+> 3. 执行SQL语句
+> 4. 处理结果集并映射成Java对象
+>
+> 注：插件的处理由它的工作方式和拦截的对象决定。
+
+##### 基础支撑层
+
+> 抽取出的通用的用来支持核心处理层的功能模块。如数据源、缓存、日志、xml解析、事务等。
+
+
+
+##### 主要工作流程
+
+![image-20201118230343998](ssm.assets/image-20201118230343998.png)
+
+https://mybatis.org/mybatis-3//zh/java-api.html#sqlSessions
+
+
+
+#### 缓存
+
+> Mybatis中有一级缓存、二级缓存，并且预留了集成第三方缓存的接口。
+>
+> 缓存体系中以Cache为接口，PerpetualCache为默认实现类，用hashmap实现缓存。PerpetualCache对象一定会创建，所以这个叫做基础缓存，另外mybatis中定义了许多装饰器，可以根据需要加很多额外功能，如回收策略、日志记录、定时刷新等。
+>
+> https://mybatis.org/mybatis-3//zh/sqlmap-xml.html#cache
+
+#### 一级缓存
+
+> 一级缓存也称为本地缓存（Local Cache），默认开启的，可通过将localCacheScope设置为STATEMENT关闭一级缓存。它在会话层面缓存。
+
+**实现**
+
+> 需要在会话层面实现，要么在SqlSession里面创建，作为SqlSession里面的一个属性，但是DefaultSqlSession中只有两个属性：Configuration、Executor。Configuration是全局的，不属于SqlSession，所以缓存只可能放在Executor中，看了源码会发现在基本执行器的父类BaseExecutor的构造函数中持有了PerpetualCache。
+
+**注意事项**
+
+> 在同一个会话中，update/delete会导致一级缓存被清空。
+>
+> 一级缓存是在BaseExecutor中的queryFromDatabase()中放进去的；query()中取出的；update()中调用clearLocalCache()清空的，如果是query则会判断是否需要清空（select标签的flushCache=true才清空，查询默认是false）
+
+**不足之处**
+
+> 一级缓存是会话层面实现的，所以不能跨会话共享，在不同会话之间对于相同数据可能有不一致的缓存。所以在有多个会话或者分布式环境下可能会查到过时的数据。于是乎引入了二级缓存。
+
+
+
+#### 二级缓存
+
+> 解决一级缓存不能跨会话共享的问题，namespace级别的缓存，可以被多个SqlSession共享（同一个接口里面的相同方法均共享），生命周期和应用同步。
+
+**实现**
+
+> 在BaseExecutor之外创建一个对象，用装饰器的类来实现的，实际类是CachingExecutor。如果启用了二级缓存，那么在创建Executor对象时会对Executor进行装饰。
+>
+> CachingExecutor对于查询请求会判断二级缓存是否有值，如果有就直接返回，没有则委派交给真正的查询器Executor实现类（如SimpleExecutor）来执行查询，再走入一级缓存的流程。最终会把结果缓存起来并返回给用户。
+
+**使用**
+
+> 在mybatis-config.xml中配置（默认是true），若关闭二级缓存则设为false。
+>
+> ```xml
+> <setting name="cacheEnabled" value="false"/>
+> ```
+>
+> 但是全局配置中的只是二级缓存总开关，在每个Mapper中还有开关，且Mapper中的开关默认是关闭的，开启方式如下：
+>
+> ```xml
+> <cache type="org.apache.ibatis.cache.impl.PerpetualCache"
+>            size="1024"
+>            eviction="LRU" 
+>            flushInterval="120000"
+>            readOnly="false"/>
+> ```
+>
+> cache属性
+>
+> ![image-20201118215314201](ssm.assets/image-20201118215314201.png)
+>
+> 如果Mapper需要开启二级缓存，但是里面的某些查询方法对数据的实时性要求很高，不需要二级缓存，则可以方法上显示关闭二级缓存（默认是true） 
+>
+> ```xml
+> <select useCache="false">
+> ```
+>
+> 
+
+**注意**
+
+> 1. 在Mapper.xml中配置了<cache>后select()会被缓存；update()、delete()、insert()会刷新缓存。（二级缓存**适用于查询为主的应用**，如历史交易、历史订单查询等。）
+>
+> 2. 多个namespace中有针对同一个表的操作，可能出现读到脏数据的情况（一个中刷新了缓存，另一个中没有刷新）。若要让多个namespace共享一个二级缓存，则要用<cache-ref>来解决。
+>
+>    ```xml
+>    <cache-ref namespace="com.XXDao"/>
+>    ```
+>
+> 3. 事务不提交，二级缓存不生效。
+
+**第三方缓存做二级缓存**
+
+> 还可通过实现Cache接口来自定义二级缓存。mybatis提供了ehcache、redis的三方缓存集成方式。
+
+
+
+
+
+建造者模式：创建复杂对象，不用关系底层是如何创建的，只需要用建造者暴露的方法即可。
+
+
+
+xml全局配置中的<configuration>  org.apache.ibatis.builder.xml.XMLConfigBuilder#XMLConfigBuilder(org.apache.ibatis.parsing.XPathParser, java.lang.String, java.util.Properties)
+
+MapperMethod#execute()执行SQL
+
+
+
+
+
+二级缓存与事务有关，只有事务提交之后才会将数据写入二级缓存。
+
+
+
+### Mybatis插件原理及Spring集成
+
+#### 插件
+
+> 作用：不用修改源码的情况下，对已有功能进行扩展。
+
+##### 编写插件
+
+1. ###### 实现Interceptor接口
+
+   ```java
+   public class PageInterceptor implements Interceptor {
+       @Override
+       public Object intercept(Invocation invocation) throws Throwable {
+           // TODO: 拦截的逻辑，需要增强的代码
+           return null;
+       }
+   
+       @Override
+       public Object plugin(Object target) {
+           return Plugin.wrap(target, this);
+       }
+   
+       @Override
+       public void setProperties(Properties properties) {
+   
+       }
+   }
+   ```
+
+2. ###### 加上注解
+
+   > 注解签名指定了需要拦截的对象、拦截的方法、参数（方法有不同的重载，所以要指定具体的参数）
+
+```java
+@Intercepts({@Signature(
+    // 指定拦截的类
+    type = Executor.class,
+     // 指定拦截的方法
+    method = "query",
+    // 参数
+    args = {MappedStatement.class, Object.class, RowBounds.class, ResultHandler.class}
+), @Signature(
+    type = Executor.class,
+    method = "query",
+    args = {MappedStatement.class, Object.class, RowBounds.class, ResultHandler.class, CacheKey.class, BoundSql.class}
+)})
+```
+
+3. ##### 加上注解
+
+   > 在mybatis-config中注册插件，配置属性。或者在Spring配置文件中配置mybatis的bean处注册插件。
+
+https://mybatis.org/mybatis-3/zh/configuration.html#plugins
+
+![image-20201119211533312](ssm.assets/image-20201119211533312.png)
+
+##### 原理
+
+> 代理模式（在不改变代码结构情况下对功能增强）+责任链模式（处理多个插件）
+>
+> 使用到拦截器机制，在获取会话时就要创建相应的代理类，被拦截多次那么在代理时会被代理多次。在调用过程会先走到触发管理类（mybatis中的Plugin类，它实现类jdk动态代理的InvocationHandler接口）的invoke()，如果拦截的方法（在签名注解中配置的拦截方法）不为空则调用intercept()（里面是我们自定义的拦截处理逻辑）（注意intercept()中要传入Invocation对象作为被代理对象的封装，方便执行完代理代码后执行被代理对象中的原始逻辑），如果有多层代理那么这儿会一层一层的调用多次。
+
+###### 代理类创建时机
+
+> 1. 在openSession()时创建的Executor（默认SimpleExecutor）
+> 2. 通过 interceptorChain.pluginAll(executor) 植入插件
+> 3. pluginAll 中遍历拦截器，依次调用 interceptor.plugin(target)
+> 4. plugin()中调用warp，warp中生成代理对象并返回（多个代理对象则会嵌套在interceptor中，如下图）
+>
+> 注意：插件的配置顺序与执行顺序是相反的（生成代理类时前面的先执行-最前面的放函数调用栈底了）
+>
+> ![image-20201122134618550](ssm.assets/image-20201122134618550.png)
+
+> 对Executor拦截的代理类是openSession()的时候创建的 Configuration.newExecutor()。
+
+```java
+// DefaultSqlSessionFactory#openSession()
+private SqlSession openSessionFromDataSource(ExecutorType execType, TransactionIsolationLevel level, boolean autoCommit) {
+    Transaction tx = null;
+    try {
+        final Environment environment = configuration.getEnvironment();
+        // 获取事务工厂
+        final TransactionFactory transactionFactory = getTransactionFactoryFromEnvironment(environment);
+        // 创建事务
+        tx = transactionFactory.newTransaction(environment.getDataSource(), level, autoCommit);
+        // 【into】根据事务工厂和默认的执行器类型，创建执行器
+        final Executor executor = configuration.newExecutor(tx, execType);
+        return new DefaultSqlSession(configuration, executor, autoCommit);
+    } catch (Exception e) {
+        closeTransaction(tx); // may have fetched a connection so lets call close()
+        throw ExceptionFactory.wrapException("Error opening session.  Cause: " + e, e);
+    } finally {
+        ErrorContext.instance().reset();
+    }
+} 
+```
+
+> StatementHandler是SimpleExecutor.doQuery()创建的；里面包含了ParameterHandler和ResultSetHandler的创建和代理。
+>
+> org.apache.ibatis.session.Configuration#newStatementHandler()、#newResultSetHandler()、#newParameterHandler()
+
+```java
+public Executor newExecutor(Transaction transaction, ExecutorType executorType) {
+    executorType = executorType == null ? defaultExecutorType : executorType;
+    executorType = executorType == null ? ExecutorType.SIMPLE : executorType;
+    Executor executor;
+    if (ExecutorType.BATCH == executorType) {
+        executor = new BatchExecutor(this, transaction);
+    } else if (ExecutorType.REUSE == executorType) {
+        executor = new ReuseExecutor(this, transaction);
+    } else {
+        // 默认 SimpleExecutor
+        executor = new SimpleExecutor(this, transaction);
+    }
+    // 二级缓存开关，settings 中的 cacheEnabled 默认是 true
+    if (cacheEnabled) {
+        executor = new CachingExecutor(executor);
+    }
+    // 植入插件的逻辑，至此，四大对象已经全部拦截完毕
+    executor = (Executor) interceptorChain.pluginAll(executor);
+    return executor;
+}
+```
+
+
+
+###### 代理怎么创建
+
+> 遍历拦截器链，对每个插件类依次创建
+>
+> 调用interceptorChain.pluginAll()后遍历InterceptorChain，使用Interceptor实现类的plugin()对目标核心对象进行代理。
+
+```java
+// InterceptorChain#pluginAll
+public Object pluginAll(Object target) {
+  for (Interceptor interceptor : interceptors) {
+    target = interceptor.plugin(target);
+  }
+  return target;
+}
+
+// Interceptor#plugin
+default Object plugin(Object target) {
+    return Plugin.wrap(target, this);
+}
+
+// Plugin#wrap
+public static Object wrap(Object target, Interceptor interceptor) {
+    Map<Class<?>, Set<Method>> signatureMap = getSignatureMap(interceptor);
+    Class<?> type = target.getClass();
+    Class<?>[] interfaces = getAllInterfaces(type, signatureMap);
+    if (interfaces.length > 0) {
+        // 返回代理对象
+        return Proxy.newProxyInstance(
+            type.getClassLoader(),
+            interfaces,
+            new Plugin(target, interceptor, signatureMap));
+    }
+    return target;
+}
+```
+
+
+
+###### 调用代理类
+
+> 因为返回的对象是代理对象，所以在调用方法时是从代理类中调用的。先走到触发管理类（mybatis中的Plugin类，它实现类jdk动态代理的InvocationHandler接口）的invoke()
+>
+> 如果拦截的方法（在签名注解中配置的拦截方法）不为空则调用intercept()（里面是我们自定义的拦截处理逻辑）（注意intercept()中要传入Invocation对象作为被代理对象的封装，方便执行完代理代码后执行被代理对象中的原始逻辑），如果有多层代理那么这儿会一层一层的调用多次。
+
+```java
+@Override
+public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+  try {
+    Set<Method> methods = signatureMap.get(method.getDeclaringClass());
+    // 调用插件中自定义的拦截处理逻辑
+    if (methods != null && methods.contains(method)) {
+      // intercept()中是我们自己实现的拦截逻辑，这儿传入Invocation对象作为参数，是作为被代理对象的封装
+      // 在代理类中执行完代理逻辑后，通过 Invocation#proceed()继续执行被代理对象中的原始逻辑
+      return interceptor.intercept(new Invocation(target, method, args));
+    }
+    // 如果有多层代理那么通过这儿会一层层的调用多次（责任链）
+    return method.invoke(target, args);
+  } catch (Exception e) {
+    throw ExceptionUtil.unwrapThrowable(e);
+  }
+}
+```
+
+**调用流程**
+
+![image-20201122144616000](ssm.assets/image-20201122144616000.png)
+
+
+
+
+
+```java
+public class MyBatisTest {
+
+    private SqlSessionFactory sqlSessionFactory;
+
+    /**
+     * 读取配置文件，看源码入口
+     */
+    @Before
+    public void prepare() throws IOException {
+        String resource = "mybatis-config.xml";
+        InputStream inputStream = Resources.getResourceAsStream(resource);
+        sqlSessionFactory = new SqlSessionFactoryBuilder().build(inputStream);
+    }
+
+    /**
+     * 使用 MyBatis API方式
+     */
+    @Test
+    public void testStatement() throws IOException {
+        SqlSession session = sqlSessionFactory.openSession();
+        try {
+            Blog blog = (Blog) session.selectOne("com.whz.mapper.BlogMapper.selectBlogById", 1);
+            System.out.println(blog);
+        } finally {
+            session.close();
+        }
+    }
+}
+```
+
+
+
+##### **应用场景**
+
+> 1. 水平分表：e.g. 一张费用表按月度拆分为12张表(fee_ 202001 -202012)，当查询条件出现月度(tran_ month) 时，把select语句中的逻辑表名修改为对应月分表。拦截处理query update
+> 2. 数据脱敏：e.g. 屏蔽电话号码中间4位，屏蔽身份证号中的生日。拦截处理query()
+
+
+
+### 与spring集成
+
+
+
+#### 配置
+
+##### 依赖
+
+> 这里要注意两点:这个包名叫mybatis-spring,而不是spring-mybatis,是因为它是MyBatis利用Spring的接口开发的。其次，mybatis 的版本和mybatis-spring的版本有兼容关系，版本要对应。
+
+```xml
+<dependency>
+    <groupId>org.mybatis</groupId>
+    <artifactId>mybatis-spring</artifactId>
+    <version>2.0.4</version>
+</dependency>
+```
+
+
+
+##### sqlSessionFactoryBean
+
+> 配置sqlSessionFactoryBean用来创建SqlSession
+
+```xml
+<bean id="sqlSessionFactory" class="org.mybatis.spring.SqlSessionFactoryBean">
+    <!-- （必配）数据源，一般是连接池管理 -->
+    <property name="dataSource" ref="dataSource"/>
+    <!-- （必配）mybatis全局配置文件 -->
+    <property name="configLocation" value="classpath:config/mybatis-config.xml"/>
+    <!-- （必配）自动扫描mapping.xml文件 -->
+    <property name="mapperLocations" value="classpath:com/whz/**/dao/*Dao.xml"/>
+    <!-- 插件配置 -->
+    <property name="plugins">
+        <list>
+            <!-- 配置pageHelper 分页插件 -->
+            <bean class="com.github.pagehelper.PageInterceptor">
+                <property name="properties">
+                    <props>
+                        <!--方言：-->
+                        <prop key="helperDialect">mysql</prop>
+                    </props>
+                </property>
+            </bean>
+            <bean class="com.whz.core.mybatis.interceptor.ProviderSqlInterceptor"/>
+        </list>
+    </property>
+</bean>
+```
+
+
+
+##### MapperScan
+
+> 配置扫描Mapper接口的路径
+
+```xml
+<bean class="org.mybatis.spring.mapper.MapperScannerConfigurer">
+    <!-- （必配）包所在路径，多个用英文逗号隔开 -->
+    <property name="basePackage" value="com.whz.**.dao"/>
+    <!-- 自定义的beanName生成器 -->
+    <property name="nameGenerator" ref="mybatisShortBeanNameGenerator"/>
+</bean>
+```
+
+> 除了这种配置方式，还可以通过scan标签配置
+
+```xml
+<mybatis-spring:scan base-package="com.whz.**.dao"/>
+```
+
+> 在springboot中还可以通过注解配置，@MapperScan("com.whz.**.dao")
+
+
+
+
+
+#### 源码分析
+
+##### 创建会话工厂
+
+> SqlSessionFactoryBean 实现了3个spring的扩展接口——FactoryBean, InitializingBean, ApplicationListener
+
+![image-20201122160620991](ssm.assets/image-20201122160620991.png)
+
+
+
+###### InitializingBean
+
+> 实现里面的afterPropertiesSet()，这个方法会在bean属性设置完时调用，在这个方法中调用了buildSqlSessionFactory()，在该方法中解析了mybatis配置文件中的配置信息并设置到configuration中，最后创建工厂类返回DefaultSqlSessionFactory。
+
+```java
+public void afterPropertiesSet() throws Exception {
+    Assert.notNull(this.dataSource, "Property 'dataSource' is required");
+    Assert.notNull(this.sqlSessionFactoryBuilder, "Property 'sqlSessionFactoryBuilder' is required");
+    Assert.state(this.configuration == null && this.configLocation == null || this.configuration == null || this.configLocation == null, "Property 'configuration' and 'configLocation' can not specified with together");
+    // 【解析配置信息，创建工厂返回DefaultSqlSessionFactory】
+    this.sqlSessionFactory = this.buildSqlSessionFactory();
+}
+```
+
+
+
+###### FactoryBean
+
+
+
+###### ApplicationListener
+
+
+
+
+
+##### 创建会话
+
+
+
+##### 接口的注册
+
+
+
+##### 接口注入
+
+
+
+
+
+SqlSessionFactoryBean 在spring启动时自动创建。它实现了InitializingBean接口，在实例化时bean属性设置完后调用。然后就进入到mybatis相关初始化。
+
+
+
+org.mybatis.spring.mapper.MapperScannerConfigurer 将dao层的接口扫描到spring容器中
+
+
+
+实现了FactoryBean，那么可以自定义bean的实例化逻辑。在该接口的getBean()中写自定义的实例化逻辑。ApplicationListener.onApplicationEvent()中可以让bean监听到某些事件时调用的方法
 

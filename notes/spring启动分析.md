@@ -488,7 +488,7 @@ protected void initStrategies(ApplicationContext context) {
 >
 > **注意：**用户可以配置多个DispatcherServlet来分别处理不同的url请求，每个DispatcherServlet上下文都对应一个自己的子Spring容器，他们都拥有相同的父Spring容器（业务层，持久（dao）bean所在的容器）。
 
-![image-20201114214944125](spring启动分析.assets/image-20201114214944125.png)
+
 
 ##### 参考
 
@@ -506,11 +506,34 @@ protected void initStrategies(ApplicationContext context) {
 
 ##### 1、注解配置
 
-> 使用 @Configuration 注解
+> 使用 [`@Configuration`](https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/context/annotation/Configuration.html) 注解，用它可以替代使用xml配置文件启动的方式，在main函数中通过[`AnnotationConfigWebApplicationContext`](https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/web/context/support/AnnotationConfigWebApplicationContext.html) 启动，即可将加了该注解的类作为启动配置类，然后读取该类里面的配置信息。
+
+```java
+/**
+ * 配置类
+ */
+@Configuration
+// 将pers.whz包下面的组件都扫描到spring容器中
+@ComponentScan({"pers.whz**"})
+public class AppConfig {
+}
+
+/**
+ * 启动类
+ */
+public class Main {
+    public static void main(String[] args) {
+        ApplicationContext context = new AnnotationConfigApplicationContext(AppConfig.class);
+        Object a = context.getBean("xxx");
+    }
+}
+```
+
+> 引入该配置类除了用AnnotationConfigApplicationContext类，还可以有其他多种方式，具体可参见 [`@Configuration`](https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/context/annotation/Configuration.html) 注解官方api说明。
 
 
 
-
+##### 2、配置文件配置
 
 
 
